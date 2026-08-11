@@ -17,7 +17,7 @@ hl.env("XDG_SESSION_TYPE", "wayland")
 -- What xdg-open and anything else that opens a link falls back to. The desktop
 -- entry in mimeapps.list is the real default; this covers the tools that never
 -- ask xdg-mime.
-hl.env("BROWSER", "google-chrome-stable")
+hl.env("BROWSER", "march-chrome")
 
 -- Portals key off these, which is what makes screen sharing and file pickers work.
 hl.env("XDG_CURRENT_DESKTOP", "Hyprland")

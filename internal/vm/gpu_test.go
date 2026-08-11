@@ -162,6 +162,15 @@ func TestHardwareAcceleratedDesktop(t *testing.T) {
 		}
 	}
 
+	// The browser, which is where the guest's acceleration stops. Chrome asks
+	// EGL for an ES 3.0 context, virgl refuses it, and Chromium compiles the
+	// ES 2.0 retry out on Linux — so the GPU process exits and there is no
+	// WebGL at all. docs/GRAPHICS.md has the measurements.
+	//
+	// That is asserted rather than merely logged, in both directions: a guest
+	// that starts rendering pages on the GPU is the news this test exists to
+	// deliver, and a guest that fails some *other* way is a regression wearing
+	// the same clothes.
 	_ = ask(`cat > /tmp/webgl.html <<'HTML'
 <html><body><canvas id=c1></canvas><script>
 var g=document.getElementById('c1').getContext('webgl2')||document.getElementById('c1').getContext('webgl');
@@ -170,19 +179,39 @@ document.body.setAttribute('data-r',g?(g.getParameter(g.VERSION)+' :: '+(d?g.get
 </script></body></html>
 HTML
 echo ok`)
-	webgl := ask(`timeout 90 google-chrome-stable --headless=new --no-sandbox --disable-gpu-sandbox ` +
-		`--dump-dom file:///tmp/webgl.html 2>/dev/null | grep --color=never -o 'data-r="[^"]*"'`)
-	software := strings.Contains(strings.ToLower(webgl), "swiftshader") ||
-		strings.Contains(strings.ToLower(webgl), "llvmpipe")
+	// Through the launcher, because that is the browser a user starts. Its
+	// stderr is kept: without it, "no WebGL" cannot be told apart from "Chrome
+	// did not run".
+	webgl := ask(`timeout 90 march-chrome --headless=new --no-sandbox --disable-gpu-sandbox ` +
+		`--enable-logging=stderr --log-level=0 --dump-dom file:///tmp/webgl.html ` +
+		`2>/tmp/chrome.log | grep --color=never -o 'data-r="[^"]*"'`)
+	refused := ask(`grep -c 'ES version fallback is disabled' /tmp/chrome.log`)
+	lower := strings.ToLower(webgl)
+	software := strings.Contains(lower, "swiftshader") || strings.Contains(lower, "llvmpipe")
+
 	switch {
-	case strings.Contains(webgl, "NONE") || strings.TrimSpace(webgl) == "":
-		t.Errorf("the browser has no WebGL at all: %q", webgl)
+	case strings.TrimSpace(webgl) == "":
+		t.Errorf("the browser produced no page at all, so nothing below was measured:\n%s",
+			ask("tail -5 /tmp/chrome.log"))
+	case !software && !strings.Contains(webgl, "NONE"):
+		// Hardware WebGL. Either Venus arrived or the ES 3.0 refusal was
+		// lifted; either way chromeGPUFlags and docs/GRAPHICS.md are now out
+		// of date, which is worth failing over.
+		t.Errorf("the browser now renders on the GPU — revisit chromeGPUFlags "+
+			"and docs/GRAPHICS.md, which both say it cannot: %s", webgl)
 	case venus && software:
 		t.Errorf("Venus is enabled but the browser still renders in software: %s", webgl)
 	case software:
-		t.Logf("browser WebGL runs on the CPU, as expected without Venus: %s", webgl)
+		// Headless Chrome can reach SwiftShader through ANGLE without ever
+		// asking native EGL for anything, so this arrives with no refusal in
+		// the log and is still the documented CPU outcome.
+		t.Logf("browser renders on the CPU, as documented: %s", webgl)
+	case strings.TrimSpace(refused) != "0":
+		t.Logf("browser has no GPU process, as documented (ES 3.0 refused): %s", webgl)
 	default:
-		t.Logf("browser WebGL is hardware accelerated: %s", webgl)
+		t.Errorf("the browser has no WebGL, but not for the reason march "+
+			"documents — the ES 3.0 refusal is absent from its log:\n%s",
+			ask("grep -iE 'gl|egl|gpu' /tmp/chrome.log | tail -5"))
 	}
 
 	// Record what the guest actually negotiated. GLES 3.0 is the ceiling on

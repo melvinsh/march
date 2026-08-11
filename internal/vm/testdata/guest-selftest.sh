@@ -204,17 +204,17 @@ fi
 app alacritty 'Alacritty' 30 alacritty
 app foot 'foot' 30 foot
 app nautilus 'nautilus' 45 nautilus --new-window
-# Chrome is started the way march's desktop entry starts it, keyring prompt and
-# welcome tour and all disabled; that is the difference between a window in five
-# seconds and no window at all.
-CHROME_FLAGS="--ozone-platform=wayland --password-store=basic --no-first-run --no-default-browser-check"
-# shellcheck disable=SC2086
-app chrome 'google-chrome' 120 google-chrome-stable $CHROME_FLAGS
+# Chrome is started the way everything else on the guest starts it: through
+# march-chrome, which holds the flags — keyring prompt and welcome tour and all
+# disabled, which is the difference between a window in five seconds and no
+# window at all. Naming the binary here instead would test a browser no user
+# ever launches.
+check chrome:launcher test -x /usr/local/bin/march-chrome
+app chrome 'google-chrome' 120 march-chrome
 
 # Chrome again, for the two things that are not "a window appeared": that it is
 # a Wayland client rather than XWayland, and that its engine actually renders.
-# shellcheck disable=SC2086
-setsid -f google-chrome-stable $CHROME_FLAGS >"$WORK/log/chrome2.log" 2>&1
+setsid -f march-chrome >"$WORK/log/chrome2.log" 2>&1
 if wait_window 'google-chrome' 120; then
   if [[ $(window_json 'google-chrome' '.xwayland') == "false" ]]; then
     pass chrome:wayland-native
@@ -227,7 +227,7 @@ fi
 pkill -f /opt/google/chrome/chrome 2>/dev/null
 sleep 2
 contains chrome:headless-render '<body>' \
-  timeout 90 google-chrome-stable --headless=new --no-sandbox --dump-dom about:blank
+  timeout 90 march-chrome --headless=new --no-sandbox --dump-dom about:blank
 
 # The keys do not run these programs directly: they run march-launch, which is
 # where the working-directory lookup, the private-window flag and the app-mode
@@ -907,11 +907,15 @@ close_window 'Alacritty'
 
 # ── 15. the default browser, as anything else would resolve it ──────────────
 
-contains browser:desktop-entry-flags '--password-store=basic' \
+contains browser:launcher-flags '--password-store=basic' cat /usr/local/bin/march-chrome
+# The desktop entry must go through the launcher — that is what makes a link
+# clicked in another program start the same browser a key does — and it must
+# keep the %U that carries the link.
+contains browser:desktop-entry-launcher 'Exec=/usr/local/bin/march-chrome %U' \
   grep -m1 '^Exec=' /usr/share/applications/google-chrome.desktop
 contains browser:xdg-settings 'google-chrome.desktop' xdg-settings get default-web-browser
 contains browser:xdg-mime 'google-chrome.desktop' xdg-mime query default x-scheme-handler/https
-if [[ ${BROWSER:-} == google-chrome-stable ]]; then
+if [[ ${BROWSER:-} == march-chrome ]]; then
   pass browser:env
 else
   fail browser:env "\$BROWSER is ${BROWSER:-unset}"

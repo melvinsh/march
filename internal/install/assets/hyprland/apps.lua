@@ -3,9 +3,10 @@
 -- package; Alacritty is the closest equivalent that does.
 --
 -- The browser is Google Chrome, which is not a pacman package at all: march
--- unpacks Google's own arm64 build. The flags are the ones march patches into
--- Chrome's desktop entry, so a key and a click start the same browser; see
--- chromeFlags in internal/install/chrome.go for what each one is for.
+-- unpacks Google's own arm64 build. It is named here through march-chrome, the
+-- launcher the install generates, because Chrome's flags depend on whether this
+-- guest renders on the host GPU — so a key, a click and a link all start the
+-- same browser with the same flags; see internal/install/chrome.go.
 --
 -- This is the one place these are named. Omarchy's launchers read the defaults
 -- from xdg-settings and $terminal; march's march-launch reads them from the
@@ -14,7 +15,7 @@
 
 local apps = {
     terminal = "alacritty",
-    browser = "google-chrome-stable --ozone-platform=wayland --password-store=basic --no-first-run --no-default-browser-check",
+    browser = "march-chrome",
     file_manager = "nautilus --new-window",
 
     -- Chromium's flag for a window with no profile behind it. Firefox would

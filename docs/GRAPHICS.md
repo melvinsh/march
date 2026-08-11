@@ -42,27 +42,73 @@ rebased per QEMU release; provenance is in
 
 ## Chrome is the exception
 
-The desktop is accelerated; **the browser is not**. Chrome's WebGL works, but
-on SwiftShader, ANGLE's CPU rasterizer:
+The desktop is accelerated; **the browser is not**. Chrome's GPU process does
+not start at all on a march guest, and it says why on the way out:
 
 ```
-WebGL 2.0 (OpenGL ES 3.0 Chromium) :: ANGLE (Google, Vulkan 1.3.0
-  (SwiftShader Device (LLVM 10.0.0)), SwiftShader driver)
+eglCreateContext ES 3.0 failed with error EGL_BAD_ATTRIBUTE.
+  ES version fallback is disabled.
+Exiting GPU process due to errors during initialization
 ```
 
-Chrome 151 routes all GL through ANGLE and refuses any other implementation
-(`--use-gl=egl` fails with *"not found in allowed implementations:
-[(gl=egl-angle,angle=default)]"*). ANGLE's default backend is Vulkan, and the
-guest has no Vulkan driver for virtio-gpu, so it falls back to software.
-Hyprland is unaffected because it drives EGL/virgl directly.
+Chrome asks EGL for an **ES 3.0 context** before it collects any GPU
+information at all, and virgl refuses it: *"Requested version is not
+supported"*. Chromium would otherwise step down to ES 2.0, but
+`ShouldFallbackToSWIfGLES3NotSupported()` in `ui/gl/gl_features.cc` returns
+`true` unconditionally off Windows and ChromeOS, so on Linux that retry is
+compiled out. The GPU process exits instead.
 
-Three routes were measured in the guest, and all are closed:
+The peculiar part is that the context is not unavailable. On the same device in
+the same session, `eglinfo` is granted ES 3.0 on the Wayland, surfaceless and
+GBM platforms, and Hyprland is *running* on one — the 3.2-to-3.0 retry recorded
+further down this page is how it got there:
+
+```
+OpenGL ES profile renderer: virgl (Apple M5 Pro)
+OpenGL ES profile version:  OpenGL ES 3.0 Mesa 26.1.6
+```
+
+So what is refused is the set of attributes Chrome asks with, not the version.
+That refusal happens before ANGLE chooses a backend, which is why no flag
+reaches past it. Every route was measured in a guest, windowed under Hyprland
+and again headless, and each produces the same two lines:
 
 | Route | Result |
 | --- | --- |
-| `--use-angle=gl` under Wayland | ANGLE's GL backend requires an X display: *"Could not open the default X display"*. |
-| `--use-angle=gl` via Hyprland's XWayland | Connects, then fails with *"GLES3 is unsupported and ES version fallback is disabled"* — no WebGL at all, worse than the default. |
-| `vulkan-virtio` (Mesa's Venus) | Everything is in place except one kernel feature — see below. |
+| default, no flag | ES 3.0 refused, GPU process exits |
+| `--use-angle=gl-egl` | ANGLE's desktop-GL backend over EGL, so no X server is involved; refused identically |
+| `--use-angle=gles-egl`, `--use-angle=gles` | as above |
+| `--use-angle=gl` | ANGLE's GL backend picks GLX instead: *"Could not open the default X display"* |
+| `--use-angle=vulkan` | the default written out; the guest has no Vulkan driver, for the reason below |
+| `--ignore-gpu-blocklist`, `--enable-gpu-rasterization` | nothing to unblock — the failure precedes GPU info collection |
+| `--use-cmd-decoder=validating` | *"Ignoring request for the validating command decoder. It is not supported on this platform."* |
+| `MESA_GLES_VERSION_OVERRIDE`, `MESA_GL_VERSION_OVERRIDE`, `MESA_EXTENSION_OVERRIDE=+GL_KHR_robustness` | the version Mesa reports is not the thing being refused |
+| `vulkan-virtio` (Mesa's Venus) | everything is in place except one kernel feature — see below |
+
+`internal/vm/chromelab_test.go` is how that table was produced: it installs one
+accelerated guest, leaves it running, and runs any probe script inside the live
+session, so measuring a newer Chrome is one command rather than another
+afternoon.
+
+### No WebGL, rather than software WebGL
+
+One consequence deserves its own heading, because it is what a user actually
+meets: the guest's browser has **no WebGL**. `getContext('webgl')` returns
+null. Chrome used to fall back to SwiftShader, its CPU rasterizer, and earlier
+versions of this page recorded exactly that; Chrome 151 deprecated the
+automatic fallback and mentions it on the way past:
+
+```
+Automatic fallback to software WebGL has been deprecated. Please use the
+  --enable-unsafe-swiftshader flag to opt in to lower security guarantees
+```
+
+march does not pass that flag. SwiftShader JIT-compiles shaders inside the GPU
+process, which is precisely why Chrome stopped reaching for it unprompted, and
+a browser exists to run untrusted code from the network. Trading that surface
+away would buy back software rendering — not the GPU — so the guest goes
+without WebGL instead. A guest that needs it can say so itself:
+`/usr/local/bin/march-chrome` is the one place Chrome's flags live.
 
 Everything else in the desktop (the compositor, its effects, and every native
 application) is accelerated.

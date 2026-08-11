@@ -228,6 +228,9 @@ func Script(p Profile) (string, error) {
 	// The desktop's configuration goes into /etc/skel first, so useradd copies
 	// it into the new account and the files belong to the user.
 	b.WriteString(hyprlandConfigSnippet(p))
+	// The launcher goes in with the other /usr/local/bin helpers, and carries
+	// the graphics flags this particular guest earned.
+	b.WriteString(chromeLauncherSnippet(p))
 	b.WriteString(chromeDefaultsSnippet())
 	w(``)
 	w(`useradd -m -G wheel,video,audio,input -s /bin/bash %s`, shellQuote(p.Username))
@@ -246,6 +249,12 @@ func Script(p Profile) (string, error) {
 	// anything at all.
 	w(`pacman-key --init >/dev/null 2>&1`)
 	w(`pacman-key --populate archlinuxarm >/dev/null 2>&1`)
+	w(``)
+	// virtio-gpu is a module, and whether it rides in the initramfs decides
+	// whether the QEMU window shows the kernel's boot log or sits black while
+	// the desktop comes up. Pinning it before mkinitcpio regenerates the
+	// initramfs makes that deterministic instead of left to autodetect.
+	b.WriteString(kmsSnippet())
 	w(``)
 	// pacstrap builds the initramfs before this point, so it was generated
 	// without the console settings written just above and warns about it.
@@ -273,7 +282,10 @@ func Script(p Profile) (string, error) {
 	// needing an NVRAM entry to survive.
 	w(`grub-install --target=arm64-efi --efi-directory=/boot/efi \`)
 	w(`  --bootloader-id=arch --removable --no-nvram`)
-	w(`sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=1/' /etc/default/grub`)
+	// An installed VM waits at its GRUB menu only for a keypress that is never
+	// going to come — the disk is the only boot target, and a black menu is a
+	// worse wait than none. Boot straight through.
+	w(`sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=0/' /etc/default/grub`)
 	// The installed system keeps a serial console so march can watch it boot
 	// alongside the graphical one. "quiet" is deliberately omitted: for a VM,
 	// visible boot progress is worth more than a clean splash, and it gives
@@ -290,6 +302,27 @@ func Script(p Profile) (string, error) {
 	w(`echo "%s"`, MarkerComplete)
 
 	return b.String(), nil
+}
+
+// kmsSnippet pins the guest's DRM driver into its initramfs, so the framebuffer
+// console — the kernel's boot log and logo — comes up before the root
+// filesystem is mounted.
+//
+// virtio-gpu is a module. If it only loads once udev reaches the installed
+// root, nothing paints the QEMU window during the firmware, GRUB and early
+// kernel phases, leaving a black screen until the display manager draws. That
+// is what the window shows when a guest boots today, and it is exactly the
+// otherwise-necessary "loader": with the driver in the initramfs the window
+// shows the guest really is booting, from a couple of seconds after power-on.
+func kmsSnippet() string {
+	return `mkdir -p /etc/mkinitcpio.conf.d
+# A boot splash needs something to draw it. Pinning the DRM driver into the
+# initramfs lets the kernel paint its logo and boot log on the window from the
+# start, instead of leaving it black until the desktop comes up.
+cat > /etc/mkinitcpio.conf.d/90-march.conf <<'MARCHKMS'
+MODULES=(virtio_gpu)
+MARCHKMS
+`
 }
 
 // autologinSnippet configures SDDM to log the user straight in, so the machine

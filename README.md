@@ -218,12 +218,19 @@ with no apt would run it daily to no effect.
 Chrome is the default browser three ways over: the desktop entry in
 `mimeapps.list` for anything that asks `xdg-mime`, `$BROWSER` for anything that
 does not, and `apps.lua`, which is the one place the desktop names its browser —
-the keys and the menu both read it from there. Because Chrome still picks X11
-unless told otherwise, every launch march controls passes
-`--ozone-platform=wayland`.
+the keys and the menu both read it from there.
 
-Its WebGL is the one thing in the guest that is *not* accelerated —
-[why](docs/GRAPHICS.md#chrome-is-the-exception).
+All three name the same thing: `march-chrome`, a launcher the install generates.
+Chrome has no flags file of its own, so before it existed the same flag string
+was repeated in five places and nothing checked that they still agreed. Now a
+key, a click, a link from another program and the self-test all start one
+browser with one set of flags — including `--ozone-platform=wayland`, without
+which Chrome picks X11 on its own.
+
+Its GPU process is the one thing in the guest that does not start: Chrome asks
+EGL for a context virgl refuses, and on Linux it will not step down, so the
+browser renders on the CPU and has no WebGL at all.
+[Why, and everything that was measured](docs/GRAPHICS.md#chrome-is-the-exception).
 
 ### The toolset
 
@@ -264,8 +271,8 @@ breaks if you skip it.
 
 The hard part is that Homebrew's QEMU is built without OpenGL, the community
 taps that add it omit `libslirp` so their guests have no network, and both take
-the name `qemu`. There is also a ceiling — GLES 3.0, a browser on SwiftShader,
-and a Venus path that cannot work on Apple Silicon.
+the name `qemu`. There is also a ceiling — GLES 3.0, a browser whose GPU process
+will not start, and a Venus path that cannot work on Apple Silicon.
 [docs/GRAPHICS.md](docs/GRAPHICS.md) has all of it, including the seven
 benign `ERR` lines every guest logs and why none of them is a fault.
 
