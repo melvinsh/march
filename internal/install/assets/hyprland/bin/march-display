@@ -1,0 +1,56 @@
+#!/bin/bash
+# Display scaling — Omarchy's omarchy-hyprland-monitor-scaling-cycle.
+#
+# The scale is applied at once and written back to ~/.config/hypr/monitor.lua,
+# which march generates at install time, so it survives a reboot. Only the
+# compositor's scale is set: Wayland scales there, and the toolkit scaling
+# variables Omarchy also writes would scale GTK windows a second time.
+set -uo pipefail
+
+MONITOR_LUA="$HOME/.config/hypr/monitor.lua"
+
+# Omarchy's ladder. The top of it is severe on a guest whose display is a
+# window on someone's desk, but the cycle comes back around.
+SCALES=(1 1.25 1.6 2 3 4)
+
+case "${1-}" in
+  scale-cycle) ;;
+  *)
+    echo "usage: march-display scale-cycle [--reverse]" >&2
+    exit 2
+    ;;
+esac
+
+read -r output current < <(hyprctl monitors -j | jq -r '.[] | select(.focused) | "\(.name) \(.scale)"')
+if [[ -z ${output-} ]]; then
+  echo "march-display: no focused monitor" >&2
+  exit 1
+fi
+
+# Hyprland snaps fractional scales to whatever divides the resolution evenly, so
+# the scale it reports is rarely the one that was asked for: the nearest entry
+# is the one to step from.
+index=$(awk -v current="$current" -v list="${SCALES[*]}" 'BEGIN {
+  n = split(list, scales, " ")
+  best = 0; best_diff = 1e9
+  for (i = 1; i <= n; i++) {
+    diff = current - scales[i]; if (diff < 0) diff = -diff
+    if (diff < best_diff) { best_diff = diff; best = i - 1 }
+  }
+  print best
+}')
+
+if [[ ${2-} == "--reverse" ]]; then
+  index=$(((index - 1 + ${#SCALES[@]}) % ${#SCALES[@]}))
+else
+  index=$(((index + 1) % ${#SCALES[@]}))
+fi
+scale="${SCALES[$index]}"
+
+hyprctl eval "hl.monitor({ output = \"$output\", mode = \"preferred\", position = \"auto\", scale = $scale })" >/dev/null
+
+if [[ -f $MONITOR_LUA ]]; then
+  sed -i -E "s/^([[:space:]]*scale = )[0-9.]+,/\\1${scale},/" "$MONITOR_LUA"
+fi
+
+notify-send -a march -u low "󰍹    Display scaling set to ${scale}x" 2>/dev/null || true

@@ -37,6 +37,8 @@ var hyprlandPackages = []string{
 	"grim", "slurp", "wl-clipboard",
 	// No brightnessctl: there is no backlight behind virtio-gpu to set.
 	"wiremix", "btop", "jq", "playerctl",
+	// What Omarchy's XF86Calculator key opens.
+	"gnome-calculator",
 
 	// What the menu is made of. Omarchy's equivalents are Quickshell panels and
 	// its own binaries; these are what Arch Linux ARM packages for the same
@@ -67,11 +69,16 @@ var hyprlandFileMap = map[string]string{
 	"mako.conf":           guestConfigRoot + "/.config/mako/config",
 	"hyprlock.conf":       guestConfigRoot + "/.config/hypr/hyprlock.conf",
 	"mpv.conf":            guestConfigRoot + "/.config/mpv/mpv.conf",
+	"alacritty.toml":      guestConfigRoot + "/.config/alacritty/alacritty.toml",
 
-	// Helpers replacing Omarchy's menu binaries; on PATH for every user.
+	// Helpers replacing Omarchy's menu and launcher binaries; on PATH for every
+	// user.
 	"bin/march-menu":        "/usr/local/bin/march-menu",
 	"bin/march-keybindings": "/usr/local/bin/march-keybindings",
+	"bin/march-launch":      "/usr/local/bin/march-launch",
 	"bin/march-term":        "/usr/local/bin/march-term",
+	"bin/march-window":      "/usr/local/bin/march-window",
+	"bin/march-display":     "/usr/local/bin/march-display",
 	"bin/march-bar":         "/usr/local/bin/march-bar",
 	"bin/march-toggle":      "/usr/local/bin/march-toggle",
 	"bin/march-capture":     "/usr/local/bin/march-capture",

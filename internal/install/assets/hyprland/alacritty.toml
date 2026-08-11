@@ -1,0 +1,20 @@
+# Alacritty, with the two bindings the desktop's universal copy and paste need.
+#
+# SUPER + C and SUPER + V (bindings.lua) send CTRL + Insert and SHIFT + Insert
+# to whatever has focus — the chords GTK and Chrome already understand, and the
+# ones Omarchy's Ghostty answers to. Alacritty binds neither by default: it
+# copies with CTRL + SHIFT + C, and its SHIFT + Insert pastes the X11 primary
+# selection rather than the clipboard. These two lines make the terminal answer
+# the same keys as everything else.
+#
+# Everything else is Alacritty's own defaults.
+
+[[keyboard.bindings]]
+key = "Insert"
+mods = "Control"
+action = "Copy"
+
+[[keyboard.bindings]]
+key = "Insert"
+mods = "Shift"
+action = "Paste"

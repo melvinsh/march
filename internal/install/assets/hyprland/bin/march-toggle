@@ -46,18 +46,36 @@ case "${1-}" in
     fi
     ;;
 
+  # Omarchy's workspace-layout toggle: dwindle for tiling, scrolling for a tape
+  # of windows the workspace pans across. Per workspace, as Omarchy does it, so
+  # one workspace can scroll while the rest tile.
   layout)
-    if [[ -f $STATE_DIR/layout-master ]]; then
-      rm -f "$STATE_DIR/layout-master"
-      hyprctl eval 'hl.config({ general = { layout = "dwindle" } })' >/dev/null
+    workspace=$(hyprctl activeworkspace -j | jq -r '.id')
+    case "$(hyprctl activeworkspace -j | jq -r '.tiledLayout')" in
+      dwindle) layout=scrolling ;;
+      *) layout=dwindle ;;
+    esac
+    hyprctl eval "hl.workspace_rule({ workspace = \"$workspace\", layout = \"$layout\" })" >/dev/null
+    notify-send -a march -u low "󱂬    Workspace layout set to $layout" 2>/dev/null || true
+    ;;
+
+  # Coerce a lone window into a square, so a single terminal on a wide display
+  # does not stretch the whole way across it. Omarchy keeps this in a config
+  # fragment it copies in and out of a sourced directory; march has no such
+  # directory, so the same two values are set directly.
+  square)
+    if [[ -f $STATE_DIR/square-on ]]; then
+      rm -f "$STATE_DIR/square-on"
+      # 0 0 is Hyprland's "no aspect ratio asked for".
+      hyprctl eval 'hl.config({ layout = { single_window_aspect_ratio = { 0, 0 } } })' >/dev/null
     else
-      mark layout-master
-      hyprctl eval 'hl.config({ general = { layout = "master" } })' >/dev/null
+      mark square-on
+      hyprctl eval 'hl.config({ layout = { single_window_aspect_ratio = { 1, 1 } } })' >/dev/null
     fi
     ;;
 
   *)
-    echo "usage: march-toggle dnd|bar|gaps|layout" >&2
+    echo "usage: march-toggle dnd|bar|gaps|layout|square" >&2
     exit 2
     ;;
 esac

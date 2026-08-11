@@ -1,6 +1,8 @@
 The Hyprland, Waybar and keybinding configuration in this directory is derived
-from Omarchy, at tag v3.8.4. The menu (bin/march-menu and the helpers around it)
-follows Omarchy's quattro branch: its menu tree, its routes and its bar layout.
+from Omarchy's own Lua configuration, on its dev branch (4.0.0.alpha) — the same
+branch the menu (bin/march-menu and the helpers around it) follows for its tree,
+its routes and its bar layout. The look and feel is Omarchy v3.8.4's, which the
+Lua branch carries over unchanged.
 
     https://github.com/basecamp/omarchy
     Copyright (c) David Heinemeier Hansson
@@ -8,16 +10,19 @@ follows Omarchy's quattro branch: its menu tree, its routes and its bar layout.
 
 Changes made for march:
 
-  * The configuration is written in Lua, not hyprlang. Hyprland deprecated
-    hyprlang in 0.55 and will drop it entirely a release or two later; the .conf
-    files were translated by hand, since Omarchy has not migrated and has no Lua
-    configuration to vendor. The behaviour is meant to be identical.
+  * The configuration is written in Lua, not hyprlang: Hyprland deprecated
+    hyprlang in 0.55 and will drop it entirely a release or two later. Omarchy's
+    released versions are still hyprlang, so the Lua files here follow the
+    branch where Omarchy itself has migrated rather than translating .conf by
+    hand.
 
-  * Bindings that invoke Omarchy's own binaries (omarchy-menu, omarchy-launch-*,
-    omarchy-toggle-*, omarchy-capture-*, voxtype, ...) are either repointed at
-    equivalents packaged for Arch Linux ARM or dropped. None of Omarchy's own
-    packages are built for aarch64, so keeping them would produce shortcuts that
-    silently do nothing.
+  * Every key Omarchy binds is bound here to the same thing, to march's
+    equivalent of the same thing, or to nothing at all — bindings.lua ends with
+    the list of the last kind and the reason for each. Omarchy's own binaries
+    (omarchy-menu, omarchy-launch-*, omarchy-hyprland-*, omarchy-capture-*,
+    voxtype, ...) have no aarch64 build, so the keys that call them are
+    repointed at march's helpers: march-menu, march-launch, march-window,
+    march-display, march-toggle, march-capture, march-clipboard, march-bar.
 
   * The app launcher is fuzzel rather than walker: walker and its elephant
     backend have no aarch64 package.
@@ -46,4 +51,10 @@ Changes made for march:
     locks itself.
 
   * The browser is Google Chrome rather than Omarchy's Chromium, unpacked from
-    Google's own aarch64 .deb because no Arch package carries one.
+    Google's own aarch64 .deb because no Arch package carries one. Omarchy's web
+    app keys open Chrome in the same --app mode.
+
+  * The terminal is Alacritty rather than Ghostty, which has no aarch64 package.
+    alacritty.toml binds CTRL + Insert and SHIFT + Insert to copy and paste, the
+    chords Omarchy's universal SUPER + C / SUPER + V send and which Ghostty
+    answers to out of the box.

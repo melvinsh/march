@@ -10,7 +10,10 @@
   "layer": "top",
   "position": "top",
   "spacing": 0,
+  // One of these is the thickness of the bar and the other is ignored,
+  // depending on which edge it sits on; march-bar position sets all three.
   "height": 26,
+  "width": 0,
   "modules-left": ["custom/menu", "hyprland/workspaces"],
   "modules-center": ["custom/dnd", "custom/recording", "clock", "custom/update"],
   "modules-right": ["tray", "network", "pulseaudio", "cpu", "memory", "custom/power"],
@@ -31,7 +34,7 @@
   "custom/menu": {
     "format": "󰣇",
     "on-click": "march-menu",
-    "tooltip-format": "Menu  (SUPER + SPACE)"
+    "tooltip-format": "Menu  (SUPER + ALT + SPACE)"
   },
 
   "clock": {

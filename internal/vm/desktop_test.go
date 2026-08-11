@@ -242,9 +242,9 @@ func TestUnattendedDesktopInstall(t *testing.T) {
 		// exist. This is the whole of march's menu: a missing one is a key or a
 		// bar button that silently does nothing.
 		helpers := []string{
-			"fuzzel", "march-menu", "march-keybindings", "march-term",
-			"march-bar", "march-toggle", "march-capture", "march-clipboard",
-			"march-pkg",
+			"fuzzel", "march-menu", "march-keybindings", "march-launch",
+			"march-term", "march-window", "march-display", "march-bar",
+			"march-toggle", "march-capture", "march-clipboard", "march-pkg",
 		}
 		// command -v prints one path per program it finds and stays silent about
 		// the rest, so the line count is the number that exist.
@@ -296,7 +296,11 @@ func TestUnattendedDesktopInstall(t *testing.T) {
 		// the XKB keysym spellings the Lua bindings use.
 		for _, want := range []string{
 			"SUPER + space", "SUPER + ALT + space", "SUPER + CTRL + C",
-			"SUPER + Return", "SUPER + W", "ALT + Tab",
+			"SUPER + Return", "SUPER + SHIFT + Return", "SUPER + W",
+			"SUPER + T", "SUPER + F", "ALT + Tab",
+			// The clipboard keys are bound to Lua callbacks rather than to a
+			// dispatcher, which is the case most likely to fail to load.
+			"SUPER + C", "SUPER + V",
 		} {
 			got := ask("sudo -u " + profile.Username + " " + hc +
 				"march-keybindings --list | grep -F " + shellQuote(want) + " | head -1")

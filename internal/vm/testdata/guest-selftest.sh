@@ -229,6 +229,15 @@ sleep 2
 contains chrome:headless-render '<body>' \
   timeout 90 google-chrome-stable --headless=new --no-sandbox --dump-dom about:blank
 
+# The keys do not run these programs directly: they run march-launch, which is
+# where the working-directory lookup, the private-window flag and the app-mode
+# browser live. Named chrome-* so the cleanup that releases Chrome's profile
+# lock applies to them too.
+app launch-terminal 'Alacritty' 30 march-launch terminal
+app launch-files 'nautilus' 45 march-launch files
+app chrome-launch 'google-chrome' 120 march-launch browser
+app chrome-webapp 'google-chrome' 120 march-launch webapp https://example.com
+
 # Media and documents need something to open, so make one of each.
 # Big and high-contrast on purpose: this image is what the OCR check reads back
 # off the screen, and a small one scaled up to a 3456-pixel display is a blur.
@@ -548,19 +557,40 @@ else
   fail toggle:gaps-on "$(hyprctl getoption general:gaps_out | head -2)"
 fi
 
+# The layout toggle is per workspace, as Omarchy's is, so it is the active
+# workspace that has to change rather than the global default.
 march-toggle layout >/dev/null 2>&1
 sleep 1
-if hyprctl getoption general:layout | grep -q 'master'; then
-  pass toggle:layout-master
+if [[ $(hyprctl activeworkspace -j | jq -r '.tiledLayout') == "scrolling" ]]; then
+  pass toggle:layout-scrolling
 else
-  fail toggle:layout-master "$(hyprctl getoption general:layout | head -2)"
+  fail toggle:layout-scrolling "$(hyprctl activeworkspace -j | jq -r '.tiledLayout')"
 fi
 march-toggle layout >/dev/null 2>&1
 sleep 1
-if hyprctl getoption general:layout | grep -q 'dwindle'; then
+if [[ $(hyprctl activeworkspace -j | jq -r '.tiledLayout') == "dwindle" ]]; then
   pass toggle:layout-dwindle
 else
-  fail toggle:layout-dwindle "$(hyprctl getoption general:layout | head -2)"
+  fail toggle:layout-dwindle "$(hyprctl activeworkspace -j | jq -r '.tiledLayout')"
+fi
+
+# Square aspect for a lone window: Omarchy's SUPER + CTRL + BACKSPACE. The
+# option is a vec2, and 0 0 is Hyprland's "no ratio asked for".
+aspect() { hyprctl -j getoption layout:single_window_aspect_ratio | jq -r '.vec2[0]'; }
+
+march-toggle square >/dev/null 2>&1
+sleep 1
+if [[ $(aspect) == "1" ]]; then
+  pass toggle:square-on
+else
+  fail toggle:square-on "aspect is $(aspect)"
+fi
+march-toggle square >/dev/null 2>&1
+sleep 1
+if [[ $(aspect) == "0" ]]; then
+  pass toggle:square-off
+else
+  fail toggle:square-off "aspect is $(aspect)"
 fi
 
 march-toggle bar >/dev/null 2>&1
@@ -576,6 +606,83 @@ if pgrep -u "$(id -u)" -x waybar >/dev/null 2>&1; then
   pass toggle:bar-on
 else
   fail toggle:bar-on "the bar did not come back"
+fi
+
+# Which edge the bar sits on, and back again.
+march-bar position bottom >/dev/null 2>&1
+sleep 3
+if grep -q '"position": "bottom"' "$HOME/.config/waybar/config.jsonc" &&
+  pgrep -u "$(id -u)" -x waybar >/dev/null 2>&1; then
+  pass bar:position-bottom
+else
+  fail bar:position-bottom "$(grep -m1 '"position"' "$HOME/.config/waybar/config.jsonc")"
+fi
+march-bar position top >/dev/null 2>&1
+sleep 3
+if grep -q '"position": "top"' "$HOME/.config/waybar/config.jsonc"; then
+  pass bar:position-top
+else
+  fail bar:position-top "$(grep -m1 '"position"' "$HOME/.config/waybar/config.jsonc")"
+fi
+
+# march-window, for the two operations Hyprland has no dispatcher for. Pop
+# floats and pins the focused window; pressing it again puts it back.
+setsid -f alacritty >"$WORK/log/window.log" 2>&1
+if wait_window 'Alacritty' 30; then
+  march-window pop >/dev/null 2>&1
+  sleep 1
+  if [[ $(window_json 'Alacritty' '.floating') == "true" && $(window_json 'Alacritty' '.pinned') == "true" ]]; then
+    pass window:pop
+  else
+    fail window:pop "floating=$(window_json 'Alacritty' '.floating') pinned=$(window_json 'Alacritty' '.pinned')"
+  fi
+
+  march-window pop >/dev/null 2>&1
+  sleep 1
+  if [[ $(window_json 'Alacritty' '.floating') == "false" ]]; then
+    pass window:pop-back
+  else
+    fail window:pop-back "the window stayed floating"
+  fi
+
+  # Transparency is not reported back by hyprctl, so what is checked is that
+  # the dispatch succeeded and that the window is being tracked as transparent.
+  address=$(window_json 'Alacritty' '.address')
+  march-window transparency >/dev/null 2>&1
+  if [[ -f "$HOME/.local/state/march/transparent/$address" ]]; then
+    pass window:transparency-on
+  else
+    fail window:transparency-on "no marker for $address"
+  fi
+  march-window transparency >/dev/null 2>&1
+  if [[ ! -f "$HOME/.local/state/march/transparent/$address" ]]; then
+    pass window:transparency-off
+  else
+    fail window:transparency-off "the marker for $address stayed"
+  fi
+
+  close_window 'Alacritty'
+else
+  fail window:pop "no terminal to work on"
+fi
+
+# Display scaling, forward and back. The scale Hyprland reports is the one it
+# snapped to, so the check is that it moved rather than what it moved to.
+before=$(hyprctl -j monitors | jq -r '.[] | select(.focused) | .scale')
+march-display scale-cycle >/dev/null 2>&1
+sleep 2
+after=$(hyprctl -j monitors | jq -r '.[] | select(.focused) | .scale')
+if [[ $before != "$after" ]]; then
+  pass display:scale-cycle
+else
+  fail display:scale-cycle "the scale stayed at $before"
+fi
+march-display scale-cycle --reverse >/dev/null 2>&1
+sleep 2
+if [[ $(hyprctl -j monitors | jq -r '.[] | select(.focused) | .scale') == "$before" ]]; then
+  pass display:scale-restore
+else
+  fail display:scale-restore "the scale did not come back to $before"
 fi
 
 # ── 9. the bar's own modules ────────────────────────────────────────────────
@@ -681,28 +788,54 @@ key_bound() {
     pass "key:$mods+$key"
   fi
 }
-# 0 none, 64 SUPER, 65 SUPER+SHIFT, 68 SUPER+CTRL, 72 SUPER+ALT.
-key_bound 64 space "Menu"
-key_bound 72 space "Launch apps"
+# 0 none, 1 SHIFT, 8 ALT, 12 CTRL+ALT, 64 SUPER, 65 SUPER+SHIFT,
+# 68 SUPER+CTRL, 72 SUPER+ALT.
+#
+# These are Omarchy's own bindings: the point of the desktop is that the keys
+# are where an Omarchy user's hands already expect them, so each one that moved
+# is a regression rather than a preference.
+key_bound 64 space "Launch apps"
+key_bound 72 space "March menu"
 key_bound 64 Escape "System menu"
 key_bound 68 C "Capture menu"
 key_bound 68 O "Toggle menu"
-key_bound 68 V "Clipboard history"
+key_bound 68 V "Clipboard manager"
 key_bound 68 E "Emoji picker"
 key_bound 64 K "Show key bindings"
-key_bound 0 Print "Screenshot region"
+key_bound 0 Print "Screenshot"
 key_bound 1 Print "Screenshot screen"
 key_bound 64 Print "Color picker"
 key_bound 68 Print "Extract text (OCR)"
-key_bound 8 Print "Record screen"
+key_bound 8 Print "Screenrecording"
 key_bound 65 space "Toggle top bar"
 key_bound 68 A "Audio controls"
-key_bound 64 Return "Terminal"
-key_bound 64 B "Web browser"
-key_bound 64 W "Close window"
-key_bound 64 F "File manager"
-key_bound 68 comma "Silence notifications"
+key_bound 68 comma "Toggle silencing notifications"
 key_bound 65 BackSpace "Toggle window gaps"
+
+# Applications, which Omarchy keeps on SUPER + SHIFT.
+key_bound 64 Return "Terminal"
+key_bound 65 Return "Browser"
+key_bound 65 B "Browser"
+key_bound 65 F "File manager"
+key_bound 65 N "Editor"
+key_bound 65 A "ChatGPT"
+
+# Windows, on plain SUPER.
+key_bound 64 W "Close window"
+key_bound 64 T "Toggle window floating/tiling"
+key_bound 64 F "Full screen"
+key_bound 72 F "Full width"
+key_bound 64 O "Pop window out"
+key_bound 64 L "Toggle workspace layout"
+key_bound 12 Delete "Close all windows"
+key_bound 64 BackSpace "Toggle window transparency"
+key_bound 68 BackSpace "Toggle single-window square aspect"
+
+# Universal copy and paste. These are Lua callbacks rather than dispatchers,
+# which is the shape most likely to fail to load at all.
+key_bound 64 C "Universal copy"
+key_bound 64 V "Universal paste"
+key_bound 64 X "Universal cut"
 
 # And the helper that shows them to the user reads the same list.
 contains keys:helper 'SUPER + space' march-keybindings --list

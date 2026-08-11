@@ -39,19 +39,20 @@ update	󰚰	Update	-	-
 system	󰤆	System	-	-
 
 learn.keybindings	󰌌	Keybindings	march-keybindings	-
-learn.hyprland	󰖟	Hyprland wiki	google-chrome-stable --ozone-platform=wayland --password-store=basic --no-first-run --no-default-browser-check https://wiki.hypr.land/	-
-learn.arch	󰣇	Arch wiki	google-chrome-stable --ozone-platform=wayland --password-store=basic --no-first-run --no-default-browser-check https://wiki.archlinux.org/	-
-learn.bash	󱆃	Bash cheatsheet	google-chrome-stable --ozone-platform=wayland --password-store=basic --no-first-run --no-default-browser-check https://devhints.io/bash	-
-learn.march	󰊤	march	google-chrome-stable --ozone-platform=wayland --password-store=basic --no-first-run --no-default-browser-check https://github.com/melvinsh/march	-
+learn.hyprland	󰖟	Hyprland wiki	march-launch browser https://wiki.hypr.land/	-
+learn.arch	󰣇	Arch wiki	march-launch browser https://wiki.archlinux.org/	-
+learn.bash	󱆃	Bash cheatsheet	march-launch browser https://devhints.io/bash	-
+learn.march	󰊤	march	march-launch browser https://github.com/melvinsh/march	-
 
 capture.region	󰩭	Screenshot region	march-capture region	-
 capture.screen	󰹑	Screenshot screen	march-capture screen	-
 capture.annotate	󰃣	Annotate last screenshot	march-capture annotate	march-capture latest
 capture.color	󰃉	Colour picker	march-capture color	-
 capture.text	󰴑	Text (OCR)	march-capture text	-
-capture.record	󰑊	Record screen	march-capture record	! march-capture record-status
-capture.record-audio	󰑊	Record screen with audio	march-capture record --audio	! march-capture record-status
-capture.record-stop	󰓛	Stop recording	march-capture record-stop	march-capture record-status
+capture.record	󰑊	Record screen	-	-
+capture.record.start	󰑊	Start recording	march-capture record	! march-capture record-status
+capture.record.audio	󰑊	Start recording with audio	march-capture record --audio	! march-capture record-status
+capture.record.stop	󰓛	Stop recording	march-capture record-stop	march-capture record-status
 
 clipboard.pick	󰅌	History	march-clipboard pick	-
 clipboard.clear	󰩹	Clear history	march-clipboard clear	-
@@ -60,12 +61,16 @@ toggle.notifications	󰂛	Silence notifications	march-toggle dnd	-
 toggle.bar	󰍜	Top bar	march-toggle bar	-
 toggle.gaps	󰋁	Window gaps	march-toggle gaps	-
 toggle.layout	󱂬	Workspace layout	march-toggle layout	-
+toggle.transparency	󰡪	Window transparency	march-window transparency	-
+toggle.square	󰝤	Single-window square aspect	march-toggle square	-
+toggle.scaling	󰍹	Display scaling	march-display scale-cycle	-
 
 setup.hyprland	󰒓	Hyprland	march-term ${EDITOR:-nvim} ~/.config/hypr/hyprland.lua	-
 setup.keybindings	󰌌	Keybindings	march-term ${EDITOR:-nvim} ~/.config/hypr/bindings.lua	-
 setup.looknfeel	󰉼	Look and feel	march-term ${EDITOR:-nvim} ~/.config/hypr/looknfeel.lua	-
 setup.monitor	󰍹	Monitor	march-term ${EDITOR:-nvim} ~/.config/hypr/monitor.lua	-
 setup.apps	󰀻	Default apps	march-term ${EDITOR:-nvim} ~/.config/hypr/apps.lua	-
+setup.terminal		Terminal	march-term ${EDITOR:-nvim} ~/.config/alacritty/alacritty.toml	-
 setup.bar	󰍜	Top bar	march-term ${EDITOR:-nvim} ~/.config/waybar/config.jsonc	-
 setup.network	󰛳	Network details	march-term --hold bash -c 'ip -brief address; ip route; cat /etc/resolv.conf'	-
 

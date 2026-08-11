@@ -45,8 +45,41 @@ case "${1-}" in
     fi
     ;;
 
+  # Which edge the bar sits on — Omarchy's omarchy-style-waybar-position. waybar
+  # has no runtime control for this, so its config is edited and it is restarted.
+  # The bar's own styling stays horizontal: on the left or right edge it works,
+  # but the modules keep their side-by-side padding.
+  position)
+    case "${2-}" in
+      top | bottom)
+        height=26
+        width=0
+        ;;
+      left | right)
+        height=0
+        width=28
+        ;;
+      *)
+        echo "usage: march-bar position top|bottom|left|right" >&2
+        exit 2
+        ;;
+    esac
+
+    config="${XDG_CONFIG_HOME:-$HOME/.config}/waybar/config.jsonc"
+    [[ -f $config ]] || { echo "march-bar: no $config" >&2; exit 1; }
+
+    sed -i -E \
+      -e "s/(\"position\"[[:space:]]*:[[:space:]]*\")[a-z]+(\")/\\1${2}\\2/" \
+      -e "s/(\"height\"[[:space:]]*:[[:space:]]*)[0-9]+/\\1${height}/" \
+      -e "s/(\"width\"[[:space:]]*:[[:space:]]*)[0-9]+/\\1${width}/" \
+      "$config"
+
+    pkill waybar
+    setsid -f waybar >/dev/null 2>&1
+    ;;
+
   *)
-    echo "usage: march-bar updates|dnd|recording" >&2
+    echo "usage: march-bar updates|dnd|recording|position <edge>" >&2
     exit 2
     ;;
 esac

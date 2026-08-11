@@ -934,10 +934,13 @@ func TestMenuTreeIsWellFormed(t *testing.T) {
 
 	hasChildren := map[string]bool{}
 	for id := range ids {
-		parent, _, nested := strings.Cut(id, ".")
-		if !nested {
+		// The parent is everything up to the last dot: routes nest as deep as
+		// the table cares to go, and march-menu walks them a level at a time.
+		dot := strings.LastIndex(id, ".")
+		if dot < 0 {
 			continue
 		}
+		parent := id[:dot]
 		if _, ok := ids[parent]; !ok {
 			t.Errorf("menu row %q hangs off %q, which is not a row", id, parent)
 		}
@@ -1063,19 +1066,43 @@ func TestHyprlandMirrorsOmarchyShortcuts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A representative sample spanning apps, tiling, workspaces and utilities.
+	// A representative sample spanning apps, the clipboard, tiling, workspaces
+	// and utilities. Every one of these is where Omarchy's own Lua
+	// configuration puts it — the modifiers matter as much as the key, since
+	// what makes them worth vendoring is that muscle memory carries over.
 	for _, want := range []string{
-		`"SUPER + Return"`, // terminal
-		`"SUPER + space"`,  // the menu, as in quattro
+		// Applications, all on SUPER + SHIFT since Omarchy moved them there.
+		`"SUPER + Return", hl.dsp.exec_cmd("march-launch terminal")`,
+		`"SUPER + SHIFT + Return", hl.dsp.exec_cmd("march-launch browser")`,
+		`"SUPER + SHIFT + B", hl.dsp.exec_cmd("march-launch browser")`,
+		`"SUPER + SHIFT + F", hl.dsp.exec_cmd("march-launch files")`,
+		`"SUPER + SHIFT + N", hl.dsp.exec_cmd("march-launch editor")`,
+
+		// Universal copy and paste, which is what SUPER + C and SUPER + V are
+		// for on an Omarchy desktop.
+		`"SUPER + C", send_shortcut_once("CTRL", "Insert")`,
+		`"SUPER + V", send_shortcut_once("SHIFT", "Insert")`,
+		`"SUPER + X", send_shortcut_once("CTRL", "X")`,
+
+		// Tiling. SUPER + T floats and SUPER + F fills the screen; both were
+		// elsewhere before Omarchy's tiling-v2 and are the two most commonly
+		// missed if this drifts.
 		`"SUPER + W", hl.dsp.window.close()`,
+		`"SUPER + T", hl.dsp.window.float({ action = "toggle" })`,
+		`"SUPER + F", hl.dsp.window.fullscreen({ mode = "fullscreen" })`,
+		`"SUPER + ALT + F", hl.dsp.window.fullscreen({ mode = "maximized" })`,
 		`"SUPER + J", hl.dsp.layout("togglesplit")`,
 		`"SUPER + left", hl.dsp.focus({ direction = "left" })`,
 		`"SUPER + SHIFT + left", hl.dsp.window.swap({ direction = "left" })`,
 		`"SUPER + Tab", hl.dsp.focus({ workspace = "e+1" })`,
 		`"ALT + Tab", hl.dsp.window.cycle_next()`,
 		`"SUPER + code:20"`,
-		`hl.dsp.workspace.toggle_special("magic")`,
+		`hl.dsp.workspace.toggle_special("scratchpad")`,
 		`hl.dsp.group.toggle()`,
+
+		// The launcher and the menu, one level apart as Omarchy has them.
+		`"SUPER + space", hl.dsp.exec_cmd("fuzzel")`,
+		`"SUPER + ALT + space", hl.dsp.exec_cmd("march-menu")`,
 	} {
 		if !strings.Contains(bindings, want) {
 			t.Errorf("omarchy shortcut %q is missing", want)

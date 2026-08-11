@@ -1,5 +1,5 @@
--- Default applications, from Omarchy v3.8.4 (see NOTICE), pointed at what is
--- packaged for Arch Linux ARM. Omarchy defaults to Ghostty, which has no aarch64
+-- Default applications, from Omarchy (see NOTICE), pointed at what is packaged
+-- for Arch Linux ARM. Omarchy defaults to Ghostty, which has no aarch64
 -- package; Alacritty is the closest equivalent that does.
 --
 -- The browser is Google Chrome, which is not a pacman package at all: march
@@ -7,14 +7,25 @@
 -- Chrome's desktop entry, so a key and a click start the same browser; see
 -- chromeFlags in internal/install/chrome.go for what each one is for.
 --
--- The table is returned so bindings.lua can `require("apps")` for it, which is
--- what the $terminal / $browser / $fileManager hyprlang variables used to do.
+-- This is the one place these are named. Omarchy's launchers read the defaults
+-- from xdg-settings and $terminal; march's march-launch reads them from the
+-- environment, which is what the hl.env calls below put them in, so changing a
+-- line here changes both the keys and the menu.
 
 local apps = {
     terminal = "alacritty",
     browser = "google-chrome-stable --ozone-platform=wayland --password-store=basic --no-first-run --no-default-browser-check",
     file_manager = "nautilus --new-window",
+
+    -- Chromium's flag for a window with no profile behind it. Firefox would
+    -- want --private-window here.
+    browser_private_flag = "--incognito",
 }
+
+hl.env("MARCH_TERMINAL", apps.terminal)
+hl.env("MARCH_BROWSER", apps.browser)
+hl.env("MARCH_BROWSER_PRIVATE_FLAG", apps.browser_private_flag)
+hl.env("MARCH_FILE_MANAGER", apps.file_manager)
 
 -- Window rules. A rule is a match table of conditions plus the effects to
 -- apply, and rules are evaluated in the order written.

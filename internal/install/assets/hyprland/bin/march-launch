@@ -1,0 +1,144 @@
+#!/bin/bash
+# Opening applications — Omarchy's omarchy-launch-* family, rebuilt on what
+# march installs. The keys in bindings.lua go through here so the behaviour
+# Omarchy puts in a helper (open where the last terminal was, focus a window
+# rather than opening a second one, run a URL as its own app) is the behaviour
+# march's keys have too.
+#
+# What each of these opens is apps.lua's to say: it exports MARCH_TERMINAL,
+# MARCH_BROWSER, MARCH_BROWSER_PRIVATE_FLAG and MARCH_FILE_MANAGER into the
+# session with hl.env. The defaults below only apply when this is run from
+# outside a Hyprland session.
+#
+# Programs are started with setsid so they outlive the shell Hyprland spawns for
+# a keybinding.
+set -uo pipefail
+
+TERMINAL="${MARCH_TERMINAL:-alacritty}"
+BROWSER="${MARCH_BROWSER:-google-chrome-stable}"
+PRIVATE_FLAG="${MARCH_BROWSER_PRIVATE_FLAG:---incognito}"
+FILE_MANAGER="${MARCH_FILE_MANAGER:-nautilus --new-window}"
+
+# Deliberately unquoted below: these hold a command *and its flags*, so they
+# have to split into words.
+
+# The directory the focused terminal's shell is sitting in, which is what makes
+# a second terminal open where the first one was left. Anything that is not a
+# terminal — a browser, the file manager — has no shell under it, and $HOME is
+# the answer then.
+terminal_cwd() {
+  local window_pid shell_pid cwd shell
+
+  window_pid=$(hyprctl activewindow -j 2>/dev/null | jq -r '.pid // empty')
+  if [[ -n $window_pid ]]; then
+    shell_pid=$(pgrep -P "$window_pid" 2>/dev/null | tail -n1)
+  fi
+
+  if [[ -n ${shell_pid-} ]]; then
+    cwd=$(readlink -f "/proc/$shell_pid/cwd" 2>/dev/null)
+    shell=$(readlink -f "/proc/$shell_pid/exe" 2>/dev/null)
+    # A login shell rather than any child process: the cwd of a running `less`
+    # is not what "where I am" means.
+    if [[ -n $shell ]] && grep -qsxF "$shell" /etc/shells && [[ -d $cwd ]]; then
+      printf '%s\n' "$cwd"
+      return
+    fi
+  fi
+
+  printf '%s\n' "$HOME"
+}
+
+case "${1-}" in
+  terminal)
+    cd "$(terminal_cwd)" || cd "$HOME" || exit 1
+    exec setsid $TERMINAL
+    ;;
+
+  tmux)
+    cd "$(terminal_cwd)" || cd "$HOME" || exit 1
+    exec setsid $TERMINAL -e bash -c 'tmux attach || tmux new -s Work'
+    ;;
+
+  # A TUI in an ordinary tiled window, as Omarchy's omarchy-launch-tui opens
+  # one. march-term is the other half of this: a floating window, for the
+  # control panels the menu opens over whatever is already on screen.
+  tui)
+    shift
+    (($# > 0)) || { echo "usage: march-launch tui command [args...]" >&2; exit 2; }
+    exec setsid $TERMINAL -e "$@"
+    ;;
+
+  editor)
+    shift
+    editor="${EDITOR:-nvim}"
+    case "$(basename "$editor")" in
+      # Console editors need a terminal around them; a GUI editor does not.
+      nvim | vim | vi | nano | micro | hx | helix) exec setsid $TERMINAL -e "$editor" "$@" ;;
+      *) exec setsid "$editor" "$@" ;;
+    esac
+    ;;
+
+  files)
+    shift
+    if [[ ${1-} == "--cwd" ]]; then
+      shift
+      exec setsid $FILE_MANAGER "$(terminal_cwd)" "$@"
+    fi
+    exec setsid $FILE_MANAGER "$@"
+    ;;
+
+  browser)
+    shift
+    private=()
+    if [[ ${1-} == "--private" ]]; then
+      shift
+      private=("$PRIVATE_FLAG")
+    fi
+    exec setsid $BROWSER "${private[@]}" "$@"
+    ;;
+
+  # A URL in its own window, with no tabs or address bar: Chromium's --app, and
+  # the reason Omarchy's web app keys feel like applications rather than links.
+  webapp)
+    shift
+    [[ -n ${1-} ]] || { echo "usage: march-launch webapp url [flags...]" >&2; exit 2; }
+    url="$1"
+    shift
+    exec setsid $BROWSER --app="$url" "$@"
+    ;;
+
+  # The same, but raising the window if it is already open. The pattern is
+  # matched against window classes and titles, so the app's name is enough.
+  webapp-focus)
+    shift
+    (($# >= 2)) || { echo "usage: march-launch webapp-focus name url" >&2; exit 2; }
+    name="$1"
+    shift
+    exec march-launch or-focus "$name" march-launch webapp "$@"
+    ;;
+
+  or-focus)
+    shift
+    (($# >= 2)) || { echo "usage: march-launch or-focus pattern command [args...]" >&2; exit 2; }
+    pattern="$1"
+    shift
+    # A window with no class or title at all is not a match, and asking jq to
+    # run a regex over null is an error rather than a miss.
+    address=$(hyprctl clients -j 2>/dev/null | jq -r --arg p "$pattern" '
+      .[]
+      | select(((.class // "") | test("\\b" + $p + "\\b"; "i"))
+            or ((.title // "") | test("\\b" + $p + "\\b"; "i")))
+      | .address' | head -1)
+    if [[ -n $address ]]; then
+      hyprctl dispatch "hl.dsp.focus({ window = \"address:$address\" })" >/dev/null 2>&1 ||
+        hyprctl dispatch focuswindow "address:$address" >/dev/null
+      exit 0
+    fi
+    exec setsid "$@"
+    ;;
+
+  *)
+    echo "usage: march-launch terminal|tmux|tui|editor|files|browser|webapp|webapp-focus|or-focus [args...]" >&2
+    exit 2
+    ;;
+esac

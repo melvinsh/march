@@ -1,0 +1,99 @@
+#!/bin/bash
+# Window operations with no dispatcher of their own — Omarchy's
+# omarchy-hyprland-window-* helpers, which is why they are shell rather than
+# lines in bindings.lua.
+#
+# Hyprland reads Lua now, so `hyprctl dispatch` is given a Lua expression; the
+# legacy dispatcher name follows as a fallback for a guest whose Hyprland
+# predates that.
+set -uo pipefail
+
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/march"
+
+# lua-expression, legacy-dispatcher, legacy-args...
+dispatch() {
+  local lua="$1"
+  shift
+  hyprctl dispatch "$lua" >/dev/null 2>&1 || hyprctl dispatch "$@" >/dev/null
+}
+
+active_address() {
+  hyprctl activewindow -j 2>/dev/null | jq -r '.address // empty'
+}
+
+case "${1-}" in
+  close-all)
+    while read -r address; do
+      [[ -n $address ]] || continue
+      dispatch "hl.dsp.window.close(\"address:$address\")" closewindow "address:$address"
+    done < <(hyprctl clients -j | jq -r '.[].address')
+    dispatch 'hl.dsp.focus({ workspace = "1" })' workspace 1
+    ;;
+
+  # Float the window, size it to most of the screen, pin it above everything
+  # and centre it — the "keep this one in view while I work" window. Pressing
+  # the key again on a pinned window puts it back in the tiling.
+  pop)
+    active=$(hyprctl activewindow -j 2>/dev/null)
+    address=$(jq -r '.address // empty' <<<"$active")
+    [[ -n $address ]] || exit 0
+    window="address:$address"
+
+    if [[ $(jq -r '.pinned' <<<"$active") == "true" ]]; then
+      dispatch "hl.dsp.window.pin({ window = \"$window\" })" pin "$window"
+      dispatch "hl.dsp.window.float({ window = \"$window\", action = \"toggle\" })" togglefloating "$window"
+      exit 0
+    fi
+
+    # Omarchy pops to a fixed 1300x900; a march guest is whatever size its
+    # window is, so the size is taken from the monitor instead. The figures are
+    # logical pixels, which is why the scale divides out.
+    read -r width height < <(hyprctl monitors -j |
+      jq -r '.[] | select(.focused) | "\((.width / .scale * 0.7) | floor) \((.height / .scale * 0.7) | floor)"')
+    : "${width:=1300}" "${height:=900}"
+
+    dispatch "hl.dsp.window.float({ window = \"$window\", action = \"toggle\" })" togglefloating "$window"
+    dispatch "hl.dsp.window.resize({ window = \"$window\", x = $width, y = $height })" \
+      resizewindowpixel "exact $width $height,$window"
+    dispatch "hl.dsp.window.center({ window = \"$window\" })" centerwindow "$window"
+    dispatch "hl.dsp.window.pin({ window = \"$window\" })" pin "$window"
+    dispatch "hl.dsp.window.alter_zorder({ window = \"$window\", mode = \"top\" })" alterzorder "top,$window"
+    ;;
+
+  # Omarchy toggles the `opaque` property, because its windows are translucent
+  # to begin with. march's are not — blur and shadows are off for software
+  # rendering, and a translucent window with no blur behind it is just harder to
+  # read — so this sets the opacity itself, and remembers which windows are
+  # holding it.
+  transparency)
+    address=$(active_address)
+    [[ -n $address ]] || exit 0
+    mkdir -p "$STATE_DIR/transparent"
+    marker="$STATE_DIR/transparent/$address"
+
+    if [[ -f $marker ]]; then
+      rm -f "$marker"
+      dispatch "hl.dsp.window.set_prop({ window = \"address:$address\", prop = \"opacity\", value = \"1\" })" \
+        setprop "address:$address" opacity 1
+    else
+      touch "$marker"
+      dispatch "hl.dsp.window.set_prop({ window = \"address:$address\", prop = \"opacity\", value = \"0.85\" })" \
+        setprop "address:$address" opacity 0.85
+    fi
+
+    # Addresses belong to windows, not to the desktop, so markers left by closed
+    # windows are swept up here rather than growing forever.
+    if [[ -d $STATE_DIR/transparent ]]; then
+      open=$(hyprctl clients -j | jq -r '.[].address')
+      for marker in "$STATE_DIR"/transparent/*; do
+        [[ -e $marker ]] || continue
+        grep -qxF "$(basename "$marker")" <<<"$open" || rm -f "$marker"
+      done
+    fi
+    ;;
+
+  *)
+    echo "usage: march-window close-all|pop|transparency" >&2
+    exit 2
+    ;;
+esac
