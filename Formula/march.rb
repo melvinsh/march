@@ -7,11 +7,8 @@
 class March < Formula
   desc "Install and manage hardware-accelerated Arch Linux ARM VMs on QEMU"
   homepage "https://github.com/melvinsh/march"
-  # Local until march is pushed to GitHub. Publishing it is a two-line change:
-  # point url at the release tarball and swap in its sha256. Everything else in
-  # this formula — the dependency graph and the tests — is already portable.
-  url "file:///Users/melvin/Code/march/dist/march-1.0.0.tar.gz"
-  sha256 "f14cc883a7a691b8807f277e9981fae65470d123b1901e8720c0e6dcb0ac6ea2"
+  url "https://github.com/melvinsh/march/archive/refs/tags/v1.0.0.tar.gz"
+  sha256 "31f84e87528130134da7485774328f3959f6ed5aaade09a61f4194ad7183f121"
   license "MIT"
   version "1.0.0"
 
