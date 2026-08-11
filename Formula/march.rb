@@ -7,10 +7,10 @@
 class March < Formula
   desc "Install and manage hardware-accelerated Arch Linux ARM VMs on QEMU"
   homepage "https://github.com/melvinsh/march"
-  url "https://github.com/melvinsh/march/archive/refs/tags/v1.4.0.tar.gz"
-  sha256 "e3575187d8d874c25aad239521be4c4877e71dd46fc90fb23ccf3e9ea46fd2ac"
+  url "https://github.com/melvinsh/march/archive/refs/tags/v1.5.0.tar.gz"
+  sha256 "29e4971a6e0cf003b1506dba1b7a90217f0392edec0eba96157738238b3bd446"
   license "MIT"
-  version "1.4.0"
+  version "1.5.0"
 
   depends_on "go" => :build
 
