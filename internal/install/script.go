@@ -142,6 +142,14 @@ func Script(p Profile) (string, error) {
 	w(`export LANG=C`)
 	w(`DISK=%s`, shellQuote(p.Disk))
 	w(``)
+	// A mirror that has merely slowed down makes pacman's download watchdog
+	// give up after ten silent seconds and fail the whole transaction — a
+	// slow mirror is worth waiting on in an unattended install, so the
+	// timeout is disabled for this run. pacstrap runs pacman against this
+	// same config file, so both pacstraps inherit it. A dry run cannot write
+	// the host's own config, so the write waits on the file being writable.
+	w(`if [ -w /etc/pacman.conf ]; then printf '\nDownloadTimeout = 0\n' >> /etc/pacman.conf; fi`)
+	w(``)
 
 	// --- tools -------------------------------------------------------------
 	w(`phase %s`, PhaseTools)
@@ -250,12 +258,6 @@ func Script(p Profile) (string, error) {
 	w(`pacman-key --init >/dev/null 2>&1`)
 	w(`pacman-key --populate archlinuxarm >/dev/null 2>&1`)
 	w(``)
-	// virtio-gpu is a module, and whether it rides in the initramfs decides
-	// whether the QEMU window shows the kernel's boot log or sits black while
-	// the desktop comes up. Pinning it before mkinitcpio regenerates the
-	// initramfs makes that deterministic instead of left to autodetect.
-	b.WriteString(kmsSnippet())
-	w(``)
 	// pacstrap builds the initramfs before this point, so it was generated
 	// without the console settings written just above and warns about it.
 	// Regenerating picks them up.
@@ -269,6 +271,7 @@ func Script(p Profile) (string, error) {
 	w(`systemctl set-default graphical.target`)
 	w(``)
 	b.WriteString(standardServicesSnippet())
+	b.WriteString(bootSnippet())
 	b.WriteString(scalingSnippet(p))
 	b.WriteString(autologinSnippet(p))
 	w(`MARCH_CHROOT`)
@@ -302,27 +305,6 @@ func Script(p Profile) (string, error) {
 	w(`echo "%s"`, MarkerComplete)
 
 	return b.String(), nil
-}
-
-// kmsSnippet pins the guest's DRM driver into its initramfs, so the framebuffer
-// console — the kernel's boot log and logo — comes up before the root
-// filesystem is mounted.
-//
-// virtio-gpu is a module. If it only loads once udev reaches the installed
-// root, nothing paints the QEMU window during the firmware, GRUB and early
-// kernel phases, leaving a black screen until the display manager draws. That
-// is what the window shows when a guest boots today, and it is exactly the
-// otherwise-necessary "loader": with the driver in the initramfs the window
-// shows the guest really is booting, from a couple of seconds after power-on.
-func kmsSnippet() string {
-	return `mkdir -p /etc/mkinitcpio.conf.d
-# A boot splash needs something to draw it. Pinning the DRM driver into the
-# initramfs lets the kernel paint its logo and boot log on the window from the
-# start, instead of leaving it black until the desktop comes up.
-cat > /etc/mkinitcpio.conf.d/90-march.conf <<'MARCHKMS'
-MODULES=(virtio_gpu)
-MARCHKMS
-`
 }
 
 // autologinSnippet configures SDDM to log the user straight in, so the machine

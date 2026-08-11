@@ -1,6 +1,8 @@
 package install
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -396,18 +398,47 @@ func TestScriptBootloader(t *testing.T) {
 	}
 }
 
-func TestScriptInitramfsKMS(t *testing.T) {
+func TestScriptBootBranding(t *testing.T) {
 	s := mustScript(t, testProfile())
-	// virtio-gpu is a module and only the initramfs can load it early enough
-	// to paint the boot log on the window; without this the guest boots to a
-	// black screen until the display manager draws.
-	if !strings.Contains(s, "MODULES=(virtio_gpu)") {
-		t.Error("the initramfs is not forced to carry the virtio-gpu DRM driver")
+
+	// The wallpaper is shipped base64 inside a heredoc, because it is binary
+	// and everything else in the script is text. It must decode to a real PNG
+	// at the destination the window-side readers agree on.
+	if !strings.Contains(s, `base64 -d > '/usr/share/backgrounds/march.png'`) {
+		t.Fatal("the wallpaper is never written to /usr/share/backgrounds")
 	}
-	// The pin must land before mkinitcpio regenerates the initramfs, or it
-	// changes nothing.
-	if i := strings.Index(s, "90-march.conf"); i < 0 || i > strings.Index(s, "mkinitcpio -P") {
-		t.Error("the DRM pin does not precede the initramfs regeneration")
+	blob := regexp.MustCompile(`(?s)MARCHBGP'\n([A-Za-z0-9+/=]+)\nMARCHBGP`).FindStringSubmatch(s)
+	if blob == nil {
+		t.Fatal("no base64 wallpaper blob found in the script")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(blob[1])
+	if err != nil {
+		t.Fatalf("the wallpaper blob is not base64: %v", err)
+	}
+	if !bytes.Equal(decoded[:8], []byte("\x89PNG\r\n\x1a\n")) {
+		t.Error("the wallpaper blob does not decode to a PNG")
+	}
+
+	// The SDDM greeter theme is installed and selected, so the display-manager
+	// phase paints the background rather than sitting black.
+	for _, want := range []string{
+		"'/usr/share/sddm/themes/march'",
+		"Main.qml",
+		"metadata.desktop",
+		"Current=march",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("the SDDM branding is missing %q", want)
+		}
+	}
+
+	// Hyprland draws the same wallpaper on its first frame; the autorestarted
+	// swaybg must name the shared background, not a hex colour.
+	if !strings.Contains(s, `swaybg -i /usr/share/backgrounds/march.png`) {
+		t.Error("Hyprland is not pointed at the shared wallpaper")
+	}
+	if strings.Contains(s, `swaybg -c "#1a1b26"`) {
+		t.Error("Hyprland still paints a flat colour, not the wallpaper")
 	}
 }
 
@@ -566,6 +597,28 @@ func TestChrootScriptsAreValidBash(t *testing.T) {
 			t.Errorf("bash rejected the %s body: %v\n%s\n--- body ---\n%s",
 				tag, err, out, body)
 		}
+	}
+}
+
+// A mirror that has merely slowed down makes pacman abort the whole transaction
+// after ten silent seconds ("Operation too slow"). The install must wait a slow
+// mirror out instead, so the live environment's download timeout is disabled
+// before any pacman or pacstrap runs.
+func TestScriptDisablesDownloadTimeout(t *testing.T) {
+	s := mustScript(t, testProfile())
+
+	if !strings.Contains(s, "DownloadTimeout = 0") {
+		t.Fatal("the live environment never disables pacman's download timeout")
+	}
+	// pacstrap runs pacman against /etc/pacman.conf, so the setting must land
+	// there before the first pacstrap and apply to every later download too.
+	pacmanConf := strings.Index(s, "/etc/pacman.conf")
+	firstPacstrap := strings.Index(s, "pacstrap ")
+	if pacmanConf < 0 {
+		t.Fatal("the timeout is not written to /etc/pacman.conf")
+	}
+	if firstPacstrap < 0 || pacmanConf > firstPacstrap {
+		t.Error("the timeout is configured after the first pacstrap, so the base install is still unprotected")
 	}
 }
 

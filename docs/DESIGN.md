@@ -81,6 +81,16 @@ rather than merely detailed. Wayland scales in the compositor, so it arrives
 through Hyprland's `monitor` line; only what XWayland cannot learn from that
 (`QT_SCALE_FACTOR` and the cursor size) is set in the environment.
 
+A fresh boot spends its first seconds on firmware and bootloader, then the
+kernel's framebuffer console scrolls the boot log for a few more — but from
+there until Hyprland's first frame, the window has nothing to draw, and that
+hand-off through SDDM's autologin is long enough to read as a hung black
+screen. march fills it with one dark wallpaper, painted twice: the SDDM greeter
+shows it from the moment the display manager takes the screen, and swaybg
+redraws the same image on the compositor's first frame. Whatever the 
+display-manager and compositor are doing, the window is showing something
+starting rather than a void.
+
 **All keystrokes go to the guest**, including combinations macOS would
 otherwise intercept. `Cmd+Space` matters most, since Hyprland binds it to the
 launcher. This is QEMU's `full-grab`; macOS asks for accessibility permission
@@ -149,6 +159,8 @@ see the exact invocation.
 - UEFI via split pflash: a shared read-only firmware image plus a per-VM
   writable variable store, so VMs keep their own boot entries and a QEMU
   upgrade updates the firmware for all of them.
+- GRUB boots straight through with a zero timeout: an installed VM has one boot
+  target and nobody waiting at its menu.
 - The installer attaches as a real CD-ROM behind `virtio-scsi`, which needs no
   USB controller and gives installers the removable-media semantics they
   expect. Boot order flips to the disk once installed.

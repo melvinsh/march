@@ -35,7 +35,9 @@ hl.on("hyprland.start", function()
     hl.exec_cmd("wl-paste --type image --watch cliphist store")
     hl.exec_cmd("wl-clip-persist --clipboard regular")
 
-    hl.exec_cmd('swaybg -c "#1a1b26"')
+    -- The background is the same image the SDDM greeter showed, so the window
+    -- never goes black between the display manager and the bar animating in.
+    hl.exec_cmd("swaybg -i /usr/share/backgrounds/march.png")
     hl.exec_cmd("/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1")
 
     -- Hand the environment to systemd and D-Bus, or portals and any service
