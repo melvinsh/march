@@ -7,6 +7,11 @@ from Omarchy, at tag v3.8.4.
 
 Changes made for march:
 
+  * The configuration is written in Lua, not hyprlang. Hyprland deprecated
+    hyprlang in 0.55 and will drop it entirely a release or two later; the .conf
+    files were translated by hand, since Omarchy has not migrated and has no Lua
+    configuration to vendor. The behaviour is meant to be identical.
+
   * Bindings that invoke Omarchy's own binaries (omarchy-menu, omarchy-launch-*,
     omarchy-toggle-*, omarchy-capture-*, voxtype, ...) are either repointed at
     equivalents packaged for Arch Linux ARM or dropped. None of Omarchy's own

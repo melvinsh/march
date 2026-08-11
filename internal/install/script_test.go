@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -821,8 +822,8 @@ func TestHyprlandAssetsAreAllWritten(t *testing.T) {
 			t.Errorf("asset %q is never written to %s", name, dest)
 		}
 	}
-	// The generated monitor line carries the resolution and scale.
-	if !strings.Contains(s, "monitor = ,preferred,auto,") {
+	// The generated monitor call carries the resolution and scale.
+	if !strings.Contains(s, `hl.monitor({`) || !strings.Contains(s, `mode = "preferred"`) {
 		t.Error("no monitor configuration was written")
 	}
 }
@@ -831,7 +832,7 @@ func TestHyprlandAssetsAreAllWritten(t *testing.T) {
 // before the account is created.
 func TestHyprlandConfigIsWrittenBeforeUseradd(t *testing.T) {
 	s := mustScript(t, hyprlandProfile())
-	skel := strings.Index(s, "/etc/skel/.config/hypr/hyprland.conf")
+	skel := strings.Index(s, "/etc/skel/.config/hypr/hyprland.lua")
 	user := strings.Index(s, "useradd -m")
 	if skel < 0 || user < 0 {
 		t.Fatal("expected both the skel config and useradd in the script")
@@ -845,71 +846,155 @@ func TestHyprlandConfigIsWrittenBeforeUseradd(t *testing.T) {
 // none of Omarchy's own binaries exist for aarch64, so any leftover reference
 // is a key that silently does nothing.
 func TestHyprlandBindingsOnlyCallInstalledPrograms(t *testing.T) {
-	bindings, err := HyprlandAsset("bindings.conf")
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	// Everything the install puts on the guest's PATH.
 	provided := map[string]bool{}
 	for _, p := range append(append([]string{}, basePackages...), hyprlandPackages...) {
 		provided[p] = true
 	}
 	// Binaries whose names differ from their package, plus march's own helpers
-	// and shell builtins used in the bindings.
+	// and the shell and systemd tools used in the bindings and autostart.
 	for _, extra := range []string{
-		"hyprctl", "makoctl", "swayosd-client", "wl-copy", "nmtui", "pkill",
-		"march-keybindings", "march-powermenu", "nvim", "wiremix", "fuzzel",
-		"waybar", "hyprlock", "hyprpicker", "grim", "slurp", "playerctl", "jq",
+		"hyprctl", "makoctl", "swayosd-client", "swayosd-server", "wl-copy",
+		"nmtui", "pkill", "march-keybindings", "march-powermenu", "nvim",
+		"wiremix", "fuzzel", "waybar", "hyprlock", "hyprpicker", "grim", "slurp",
+		"playerctl", "jq", "systemctl", "dbus-update-activation-environment",
 	} {
 		provided[extra] = true
 	}
 
-	// hyprlang variables are resolved in apps.conf, not here.
-	vars := map[string]bool{"$terminal": true, "$browser": true, "$fileManager": true}
-
-	for _, line := range strings.Split(bindings, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "#") || !strings.Contains(line, ", exec, ") {
+	for _, name := range HyprlandAssetNames() {
+		if !strings.HasSuffix(name, ".lua") {
 			continue
 		}
-		cmd := strings.TrimSpace(line[strings.Index(line, ", exec, ")+len(", exec, "):])
-		first := strings.Fields(cmd)
-		if len(first) == 0 {
-			continue
+		body, err := HyprlandAsset(name)
+		if err != nil {
+			t.Fatal(err)
 		}
-		bin := first[0]
-		if vars[bin] || provided[bin] {
-			continue
+		for _, cmd := range luaExecCommands(body) {
+			fields := strings.Fields(cmd)
+			if len(fields) == 0 {
+				continue
+			}
+			bin := fields[0]
+			switch {
+			// The app commands themselves are the apps.lua table, checked below.
+			case strings.HasPrefix(bin, "apps."):
+				continue
+			// An absolute path stands on its own.
+			case strings.HasPrefix(bin, "/"):
+				continue
+			case provided[bin]:
+				continue
+			}
+			t.Errorf("%s runs %q, which nothing installs:\n  %s", name, bin, cmd)
 		}
-		t.Errorf("binding runs %q, which nothing installs:\n  %s", bin, line)
 	}
+
+	// The three commands the bindings reach through the apps table.
+	apps, err := HyprlandAsset("apps.lua")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"terminal", "browser", "file_manager"} {
+		cmd := luaTableString(apps, field)
+		if cmd == "" {
+			t.Errorf("apps.lua defines no %q", field)
+			continue
+		}
+		if bin := strings.Fields(cmd)[0]; !provided[bin] {
+			t.Errorf("apps.%s is %q, which nothing installs", field, bin)
+		}
+	}
+}
+
+// luaExecCommands pulls the command out of every hl.exec_cmd / hl.dsp.exec_cmd
+// call. The argument is either a "quoted" string, a [[long]] string, or an
+// expression built from the apps table, and all three are returned verbatim.
+func luaExecCommands(body string) []string {
+	var out []string
+	for _, line := range strings.Split(body, "\n") {
+		if trimmed := strings.TrimSpace(line); strings.HasPrefix(trimmed, "--") {
+			continue
+		}
+		rest := line
+		for {
+			i := strings.Index(rest, "exec_cmd(")
+			if i < 0 {
+				break
+			}
+			rest = rest[i+len("exec_cmd("):]
+			arg := rest
+			switch {
+			case strings.HasPrefix(arg, `"`), strings.HasPrefix(arg, `'`):
+				quote := arg[:1]
+				if end := strings.Index(arg[1:], quote); end >= 0 {
+					arg = arg[1 : 1+end]
+				}
+			case strings.HasPrefix(arg, "[["):
+				if end := strings.Index(arg, "]]"); end >= 0 {
+					arg = arg[2:end]
+				}
+			default:
+				if end := strings.Index(arg, ")"); end >= 0 {
+					arg = arg[:end]
+				}
+			}
+			out = append(out, arg)
+		}
+	}
+	return out
+}
+
+// luaTableString returns the value of a `field = "value"` entry.
+func luaTableString(body, field string) string {
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, field+" = \"") {
+			continue
+		}
+		v := line[len(field+" = \""):]
+		if end := strings.Index(v, `"`); end >= 0 {
+			return v[:end]
+		}
+	}
+	return ""
 }
 
 // The keybindings are Omarchy's; drifting from them defeats the point.
 func TestHyprlandMirrorsOmarchyShortcuts(t *testing.T) {
-	bindings, err := HyprlandAsset("bindings.conf")
+	bindings, err := HyprlandAsset("bindings.lua")
 	if err != nil {
 		t.Fatal(err)
 	}
 	// A representative sample spanning apps, tiling, workspaces and utilities.
 	for _, want := range []string{
-		"SUPER, RETURN", // terminal
-		"SUPER, SPACE",  // launcher
-		"SUPER, W, Close window",
-		"SUPER, J, Toggle window split",
-		"SUPER, LEFT, Move focus left",
-		"SUPER SHIFT, LEFT, Swap window to the left",
-		"SUPER, code:10, Switch to workspace 1",
-		"SUPER SHIFT, code:10, Move window to workspace 1",
-		"SUPER, TAB, Next workspace",
-		"ALT, TAB, Cycle to next window",
-		"SUPER, code:20, Expand window left",
-		"SUPER, S, Toggle scratchpad",
-		"SUPER, G, Toggle window grouping",
+		`"SUPER + Return"`, // terminal
+		`"SUPER + space"`,  // launcher
+		`"SUPER + W", hl.dsp.window.close()`,
+		`"SUPER + J", hl.dsp.layout("togglesplit")`,
+		`"SUPER + left", hl.dsp.focus({ direction = "left" })`,
+		`"SUPER + SHIFT + left", hl.dsp.window.swap({ direction = "left" })`,
+		`"SUPER + Tab", hl.dsp.focus({ workspace = "e+1" })`,
+		`"ALT + Tab", hl.dsp.window.cycle_next()`,
+		`"SUPER + code:20"`,
+		`hl.dsp.workspace.toggle_special("magic")`,
+		`hl.dsp.group.toggle()`,
 	} {
 		if !strings.Contains(bindings, want) {
 			t.Errorf("omarchy shortcut %q is missing", want)
+		}
+	}
+
+	// The workspace bindings are a loop rather than twenty lines, so assert the
+	// keycodes and dispatchers it is built from.
+	for _, want := range []string{
+		`for i = 1, 10 do`,
+		`"code:" .. (9 + i)`,
+		`hl.dsp.focus({ workspace = i })`,
+		`hl.dsp.window.move({ workspace = i })`,
+	} {
+		if !strings.Contains(bindings, want) {
+			t.Errorf("workspace bindings are missing %q", want)
 		}
 	}
 }
@@ -921,7 +1006,7 @@ func TestHyprlandScalesInTheCompositor(t *testing.T) {
 	p.ScalePercent = 200
 	s := mustScript(t, p)
 
-	if !strings.Contains(s, "monitor = ,preferred,auto,2") {
+	if !strings.Contains(s, "scale = 2,") {
 		t.Error("the compositor scale was not set")
 	}
 	if strings.Contains(s, "GDK_SCALE") {
@@ -955,15 +1040,17 @@ func TestHyprlandAutologinUsesWayland(t *testing.T) {
 
 // Blur, shadows and animations are drawn by llvmpipe on the CPU here.
 func TestHyprlandDisablesEffectsForSoftwareRendering(t *testing.T) {
-	look, err := HyprlandAsset("looknfeel.conf")
+	look, err := HyprlandAsset("looknfeel.lua")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"blur {\n        enabled = false",
-		"shadow {\n        enabled = false",
-		"animations {\n    enabled = false",
-		"no_hardware_cursors = true",
+		"blur = {\n            enabled = false,",
+		"shadow = {\n            enabled = false,",
+		"animations = {\n        enabled = false,",
+		// An int (0 hw / 1 never / 2 auto), not a bool: Hyprland's Lua config is
+		// typed, and a bool here is a config error rather than a silent 1.
+		"no_hardware_cursors = 1,",
 	} {
 		if !strings.Contains(look, want) {
 			t.Errorf("software-rendering adaptation missing: %q", want)
@@ -1017,35 +1104,25 @@ func TestHyprlandHeredocMarkersAreUnique(t *testing.T) {
 	}
 }
 
-// Hyprland 0.53 replaced the old "windowrule = float, class:^(x)$" form, and
-// 0.56 rejects it outright — the desktop then starts with an error banner. The
-// renamed fields are easy to miss, so they are pinned here.
+// A window rule with no match table is rejected outright — the desktop then
+// starts with an error banner. Every rule march ships must carry one.
 func TestHyprlandWindowRulesUseCurrentSyntax(t *testing.T) {
-	apps, err := HyprlandAsset("apps.conf")
+	apps, err := HyprlandAsset("apps.lua")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	for _, line := range strings.Split(apps, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "windowrule") {
-			continue
+	rules := strings.Split(apps, "hl.window_rule({")
+	if len(rules) < 2 {
+		t.Fatal("apps.lua declares no window rules at all")
+	}
+	for _, rule := range rules[1:] {
+		body := rule
+		if end := strings.Index(body, "})"); end >= 0 {
+			body = body[:end]
 		}
-		if strings.HasPrefix(line, "windowrulev2") {
-			t.Errorf("windowrulev2 is deprecated: %s", line)
-		}
-		// Every rule must state what it matches on.
-		if !strings.Contains(line, "match:") {
-			t.Errorf("rule has no match: condition, which 0.56 rejects: %s", line)
-		}
-		// Fields renamed in 0.56; the old names are silently invalid.
-		for old, current := range map[string]string{
-			"suppressevent": "suppress_event",
-			"nofocus":       "no_focus",
-		} {
-			if strings.Contains(line, old+" ") || strings.Contains(line, ", "+old) {
-				t.Errorf("%q was renamed to %q: %s", old, current, line)
-			}
+		if !strings.Contains(body, "match = {") {
+			t.Errorf("rule has no match table, which Hyprland rejects:\nhl.window_rule({%s})", body)
 		}
 	}
 }
@@ -1069,27 +1146,162 @@ func TestHyprlandConfigUsesNoRemovedOptions(t *testing.T) {
 	}
 }
 
+// hyprlang is deprecated since Hyprland 0.55 and will be dropped a release or
+// two later. A line left in the old syntax is not a syntax error in Lua — it
+// parses as something else entirely, or not at all — so it is worth naming the
+// leftovers directly.
+func TestHyprlandConfigHasNoLeftoverHyprlang(t *testing.T) {
+	// The hyprlang keywords, as they appear at the head of a line. The value has
+	// to be something other than a table constructor, or Lua's own `binds = {`
+	// and `animations = {` sections read as hyprlang.
+	leftover := regexp.MustCompile(`^\s*(bind[a-z]*|windowrule[a-z0-9]*|layerrule|exec-once|exec|env|source|monitor|animation|bezier|submap|\$[A-Za-z_]\w*)\s*=\s*[^{\s]`)
+
+	for _, name := range HyprlandAssetNames() {
+		if !strings.HasSuffix(name, ".lua") {
+			continue
+		}
+		body, err := HyprlandAsset(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, line := range strings.Split(body, "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "--") {
+				continue
+			}
+			if leftover.MatchString(line) {
+				t.Errorf("%s:%d is still hyprlang, not Lua:\n  %s", name, i+1, strings.TrimSpace(line))
+			}
+			// hyprctl lost `keyword` when the config became Lua, and getoption
+			// now takes section.option rather than section:option.
+			if strings.Contains(line, "hyprctl keyword") {
+				t.Errorf("%s:%d calls `hyprctl keyword`, which no longer exists", name, i+1)
+			}
+		}
+	}
+}
+
+// The generated files are Lua too, and nothing else parses them before a real
+// install would.
+func TestHyprlandGeneratedConfigIsLua(t *testing.T) {
+	for _, accelerated := range []bool{false, true} {
+		p := hyprlandProfile()
+		p.GPUAccelerated = accelerated
+
+		for name, body := range map[string]string{
+			"monitor.lua": hyprlandMonitorConfig(p),
+			"effects.lua": hyprlandEffectsConfig(p),
+		} {
+			for i, line := range strings.Split(body, "\n") {
+				trimmed := strings.TrimSpace(line)
+				if trimmed == "" {
+					continue
+				}
+				// Every non-blank line is either a Lua comment or Lua code; a
+				// stray "#" comment would abort the whole file.
+				if strings.HasPrefix(trimmed, "#") {
+					t.Errorf("%s:%d (accelerated=%v) uses a shell comment, not a Lua one:\n  %s",
+						name, i+1, accelerated, trimmed)
+				}
+			}
+		}
+	}
+}
+
+// Hyprland reads hyprland.lua in preference to hyprland.conf, and every file it
+// pulls in has to be require()d rather than sourced.
+func TestHyprlandTopLevelRequiresEveryConfigFile(t *testing.T) {
+	top, err := HyprlandAsset("hyprland.lua")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, module := range []string{"apps", "envs", "looknfeel", "bindings", "effects", "monitor"} {
+		if !strings.Contains(top, `require("`+module+`")`) {
+			t.Errorf("hyprland.lua never requires %q, so that file is dead", module)
+		}
+	}
+
+	// Autostart moved from exec-once onto the start event.
+	if !strings.Contains(top, `hl.on("hyprland.start"`) {
+		t.Error("nothing is autostarted: the hyprland.start handler is missing")
+	}
+}
+
+// A syntax error means Hyprland refuses the config outright and falls back to
+// its own default desktop. luac only ships with Lua, so this skips when no
+// parser is installed — the E2E is the gate that always runs.
+func TestHyprlandAssetsAreValidLua(t *testing.T) {
+	var check func(path string) *exec.Cmd
+	switch {
+	case lookPathOK("luac"):
+		check = func(path string) *exec.Cmd { return exec.Command("luac", "-p", path) }
+	case lookPathOK("lua"):
+		check = func(path string) *exec.Cmd { return exec.Command("lua", "-e", "assert(loadfile('"+path+"'))") }
+	case lookPathOK("luajit"):
+		check = func(path string) *exec.Cmd { return exec.Command("luajit", "-e", "assert(loadfile('"+path+"'))") }
+	default:
+		t.Skip("no Lua parser (luac, lua or luajit) on PATH; install one to check the configs here")
+	}
+
+	dir := t.TempDir()
+	files := map[string]string{}
+	for _, name := range HyprlandAssetNames() {
+		if !strings.HasSuffix(name, ".lua") {
+			continue
+		}
+		body, err := HyprlandAsset(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[name] = body
+	}
+	// The generated ones are Lua the guest has to load too.
+	p := hyprlandProfile()
+	p.GPUAccelerated = true
+	files["monitor.lua"] = hyprlandMonitorConfig(p)
+	files["effects.lua"] = hyprlandEffectsConfig(p)
+	p.GPUAccelerated = false
+	files["effects-software.lua"] = hyprlandEffectsConfig(p)
+
+	if len(files) == 0 {
+		t.Fatal("no Lua assets were found to check")
+	}
+	for name, body := range files {
+		path := filepath.Join(dir, strings.ReplaceAll(name, "/", "_"))
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := check(path).CombinedOutput(); err != nil {
+			t.Errorf("%s is not valid Lua: %v\n%s", name, err, out)
+		}
+	}
+}
+
+func lookPathOK(bin string) bool {
+	_, err := exec.LookPath(bin)
+	return err == nil
+}
+
 // Effects are disabled because software rendering makes them painful. With the
 // guest drawing on the host GPU they cost little, so Omarchy's look is restored.
 func TestHyprlandEffectsFollowRendering(t *testing.T) {
 	soft := hyprlandProfile()
 	soft.GPUAccelerated = false
 	s := mustScript(t, soft)
-	if strings.Contains(s, "blur {\n        enabled = true") {
+	if strings.Contains(s, "blur = {\n            enabled = true") {
 		t.Error("blur was enabled on a guest that renders in software")
 	}
 
 	accel := hyprlandProfile()
 	accel.GPUAccelerated = true
 	s = mustScript(t, accel)
-	for _, want := range []string{"blur {", "enabled = true", "animations {"} {
+	for _, want := range []string{"blur = {", "enabled = true,", "animations = {", "hl.curve(", "hl.animation("} {
 		if !strings.Contains(s, want) {
 			t.Errorf("hardware-rendered guest is missing %q", want)
 		}
 	}
-	// Whichever way, the file must exist so hyprland.conf's source line resolves.
-	if !strings.Contains(s, "effects.conf") {
-		t.Error("effects.conf is never written, so hyprland.conf would fail to source it")
+	// Whichever way, the file must exist or hyprland.lua's require fails.
+	if !strings.Contains(s, "effects.lua") {
+		t.Error("effects.lua is never written, so hyprland.lua would fail to require it")
 	}
 }
 

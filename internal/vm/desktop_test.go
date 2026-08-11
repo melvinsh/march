@@ -249,7 +249,9 @@ func TestUnattendedDesktopInstall(t *testing.T) {
 		// both that the bindings loaded and that the helper's jq actually works.
 		// The list is long and sorted, so each binding is looked up directly
 		// rather than by truncating the output.
-		for _, want := range []string{"SUPER + SPACE", "SUPER + RETURN", "SUPER + W", "ALT + TAB"} {
+		// hyprctl reports the key as it was written in the config, so these are
+		// the XKB keysym spellings the Lua bindings use.
+		for _, want := range []string{"SUPER + space", "SUPER + Return", "SUPER + W", "ALT + Tab"} {
 			got := ask("sudo -u " + profile.Username + " " + hc +
 				"march-keybindings --list | grep -F " + shellQuote(want) + " | head -1")
 			if !strings.Contains(got, want) {
@@ -257,7 +259,7 @@ func TestUnattendedDesktopInstall(t *testing.T) {
 			}
 		}
 		// The config must have been copied out of /etc/skel into the account.
-		if out := ask("ls /home/" + profile.Username + "/.config/hypr/hyprland.conf 2>&1"); strings.Contains(out, "No such file") {
+		if out := ask("ls /home/" + profile.Username + "/.config/hypr/hyprland.lua 2>&1"); strings.Contains(out, "No such file") {
 			t.Errorf("the Hyprland config never reached the account: %s", out)
 		}
 	}

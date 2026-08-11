@@ -45,11 +45,11 @@ const guestConfigRoot = "/etc/skel"
 
 // hyprlandFileMap maps each embedded asset to its path in the guest.
 var hyprlandFileMap = map[string]string{
-	"hyprland.conf":       guestConfigRoot + "/.config/hypr/hyprland.conf",
-	"bindings.conf":       guestConfigRoot + "/.config/hypr/bindings.conf",
-	"looknfeel.conf":      guestConfigRoot + "/.config/hypr/looknfeel.conf",
-	"apps.conf":           guestConfigRoot + "/.config/hypr/apps.conf",
-	"envs.conf":           guestConfigRoot + "/.config/hypr/envs.conf",
+	"hyprland.lua":        guestConfigRoot + "/.config/hypr/hyprland.lua",
+	"bindings.lua":        guestConfigRoot + "/.config/hypr/bindings.lua",
+	"looknfeel.lua":       guestConfigRoot + "/.config/hypr/looknfeel.lua",
+	"apps.lua":            guestConfigRoot + "/.config/hypr/apps.lua",
+	"envs.lua":            guestConfigRoot + "/.config/hypr/envs.lua",
 	"waybar/config.jsonc": guestConfigRoot + "/.config/waybar/config.jsonc",
 	"waybar/style.css":    guestConfigRoot + "/.config/waybar/style.css",
 	"fuzzel.ini":          guestConfigRoot + "/.config/fuzzel/fuzzel.ini",
@@ -113,13 +113,13 @@ func hyprlandConfigSnippet(p Profile) string {
 
 	// Visual effects depend on how the guest renders, which is a property of
 	// the machine rather than of Omarchy's configuration.
-	fmt.Fprintf(&b, "cat > %s <<'MARCHEFFECTS'\n", guestConfigRoot+"/.config/hypr/effects.conf")
+	fmt.Fprintf(&b, "cat > %s <<'MARCHEFFECTS'\n", guestConfigRoot+"/.config/hypr/effects.lua")
 	b.WriteString(hyprlandEffectsConfig(p))
 	b.WriteString("MARCHEFFECTS\n")
 
 	// The monitor line is generated rather than embedded: the resolution and
 	// scale are march's, not Omarchy's.
-	fmt.Fprintf(&b, "cat > %s <<'MARCHMONITOR'\n", guestConfigRoot+"/.config/hypr/monitor.conf")
+	fmt.Fprintf(&b, "cat > %s <<'MARCHMONITOR'\n", guestConfigRoot+"/.config/hypr/monitor.lua")
 	b.WriteString(hyprlandMonitorConfig(p))
 	b.WriteString("MARCHMONITOR\n")
 
@@ -131,9 +131,14 @@ func hyprlandConfigSnippet(p Profile) string {
 // path entirely for Hyprland.
 func hyprlandMonitorConfig(p Profile) string {
 	scale := p.scaleFactor()
-	return fmt.Sprintf(`# Written by march. "preferred" follows whatever resolution QEMU reports,
-# so the desktop tracks the window rather than being pinned to one size.
-monitor = ,preferred,auto,%d
+	return fmt.Sprintf(`-- Written by march. "preferred" follows whatever resolution QEMU reports,
+-- so the desktop tracks the window rather than being pinned to one size.
+hl.monitor({
+    output = "",
+    mode = "preferred",
+    position = "auto",
+    scale = %d,
+})
 `, scale)
 }
 
@@ -142,55 +147,58 @@ monitor = ,preferred,auto,%d
 // would otherwise be drawn on the CPU.
 func hyprlandEffectsConfig(p Profile) string {
 	if !p.GPUAccelerated {
-		return `# This guest renders in software (llvmpipe), so Omarchy's blur, shadows and
-# animations stay off — on the CPU they cost far more than they are worth.
-# Installing march's accelerated QEMU turns them back on automatically.
+		return `-- This guest renders in software (llvmpipe), so Omarchy's blur, shadows and
+-- animations stay off — on the CPU they cost far more than they are worth.
+-- Installing march's accelerated QEMU turns them back on automatically.
 `
 	}
-	return `# This guest renders on the host GPU, so Omarchy's effects are restored.
-decoration {
-    rounding = 0
+	return `-- This guest renders on the host GPU, so Omarchy's effects are restored.
+hl.config({
+    decoration = {
+        rounding = 0,
 
-    shadow {
-        enabled = true
-        range = 2
-        render_power = 3
-        color = rgba(1a1a1aee)
-    }
+        shadow = {
+            enabled = true,
+            range = 2,
+            render_power = 3,
+            color = "rgba(1a1a1aee)",
+        },
 
-    blur {
-        enabled = true
-        size = 2
-        passes = 2
-        special = true
-        brightness = 0.60
-        contrast = 0.75
-    }
-}
+        blur = {
+            enabled = true,
+            size = 2,
+            passes = 2,
+            special = true,
+            brightness = 0.60,
+            contrast = 0.75,
+        },
+    },
 
-animations {
-    enabled = true
+    animations = {
+        enabled = true,
+    },
+})
 
-    bezier = easeOutQuint,0.23,1,0.32,1
-    bezier = easeInOutCubic,0.65,0.05,0.36,1
-    bezier = linear,0,0,1,1
-    bezier = almostLinear,0.5,0.5,0.75,1.0
-    bezier = quick,0.15,0,0.1,1
+-- Curves have to exist before an animation can name one.
+hl.curve("easeOutQuint", { type = "bezier", points = { { 0.23, 1 }, { 0.32, 1 } } })
+hl.curve("easeInOutCubic", { type = "bezier", points = { { 0.65, 0.05 }, { 0.36, 1 } } })
+hl.curve("linear", { type = "bezier", points = { { 0, 0 }, { 1, 1 } } })
+hl.curve("almostLinear", { type = "bezier", points = { { 0.5, 0.5 }, { 0.75, 1.0 } } })
+hl.curve("quick", { type = "bezier", points = { { 0.15, 0 }, { 0.1, 1 } } })
 
-    animation = global, 1, 10, default
-    animation = border, 1, 5.39, easeOutQuint
-    animation = windows, 1, 3.79, easeOutQuint
-    animation = windowsIn, 1, 4.1, easeOutQuint, popin 87%
-    animation = windowsOut, 1, 1.49, linear, popin 87%
-    animation = fadeIn, 1, 1.73, almostLinear
-    animation = fadeOut, 1, 1.46, almostLinear
-    animation = fade, 1, 3.03, quick
-    animation = layers, 1, 3.81, easeOutQuint
-    animation = layersIn, 1, 4, easeOutQuint, fade
-    animation = layersOut, 1, 1.5, linear, fade
-    animation = workspaces, 0, 0, ease
-    animation = specialWorkspace, 1, 3, easeOutQuint, slidevert
-}
+hl.animation({ leaf = "global", enabled = true, speed = 10, bezier = "default" })
+hl.animation({ leaf = "border", enabled = true, speed = 5.39, bezier = "easeOutQuint" })
+hl.animation({ leaf = "windows", enabled = true, speed = 3.79, bezier = "easeOutQuint" })
+hl.animation({ leaf = "windowsIn", enabled = true, speed = 4.1, bezier = "easeOutQuint", style = "popin 87%" })
+hl.animation({ leaf = "windowsOut", enabled = true, speed = 1.49, bezier = "linear", style = "popin 87%" })
+hl.animation({ leaf = "fadeIn", enabled = true, speed = 1.73, bezier = "almostLinear" })
+hl.animation({ leaf = "fadeOut", enabled = true, speed = 1.46, bezier = "almostLinear" })
+hl.animation({ leaf = "fade", enabled = true, speed = 3.03, bezier = "quick" })
+hl.animation({ leaf = "layers", enabled = true, speed = 3.81, bezier = "easeOutQuint" })
+hl.animation({ leaf = "layersIn", enabled = true, speed = 4, bezier = "easeOutQuint", style = "fade" })
+hl.animation({ leaf = "layersOut", enabled = true, speed = 1.5, bezier = "linear", style = "fade" })
+hl.animation({ leaf = "workspaces", enabled = false })
+hl.animation({ leaf = "specialWorkspace", enabled = true, speed = 3, bezier = "easeOutQuint", style = "slidevert" })
 `
 }
 

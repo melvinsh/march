@@ -159,6 +159,16 @@ The configuration lands in `/etc/skel`, so it is copied into the account at
 creation and is yours to edit. Provenance and the full list of changes are in
 `internal/install/assets/hyprland/NOTICE`.
 
+It is written in **Lua**, not hyprlang: Hyprland deprecated its own config
+language in 0.55 and reads `~/.config/hypr/hyprland.lua` in preference to
+`hyprland.conf`, which it will stop reading entirely a release or two later.
+Omarchy has not migrated, so march's files are a hand translation of its
+v3.8.4 `.conf` — same bar, same bindings, same behaviour. Two shortcuts had to
+be rewritten rather than re-spelled, because the commands they shelled out to
+are gone in the Lua era: zoom now keeps its level in Lua instead of reading it
+back with `hyprctl keyword`, and the power menu's Log out dispatches
+`hl.dsp.exit()`.
+
 The chosen user is logged in automatically — via a LightDM/SDDM drop-in or
 GDM's `custom.conf` — so the machine really does land on a desktop rather than
 a login screen.
