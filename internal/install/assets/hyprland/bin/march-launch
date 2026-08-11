@@ -15,7 +15,11 @@
 set -uo pipefail
 
 TERMINAL="${MARCH_TERMINAL:-alacritty}"
-BROWSER="${MARCH_BROWSER:-google-chrome-stable}"
+# The fallback carries Chrome's flags rather than only its name: without
+# --ozone-platform=wayland Chrome picks X11, finds no display, and exits with
+# "Missing X server or $DISPLAY". A default that cannot open a window is not a
+# default. Keep in step with chromeFlags in internal/install/chrome.go.
+BROWSER="${MARCH_BROWSER:-google-chrome-stable --ozone-platform=wayland --password-store=basic --no-first-run --no-default-browser-check}"
 PRIVATE_FLAG="${MARCH_BROWSER_PRIVATE_FLAG:---incognito}"
 FILE_MANAGER="${MARCH_FILE_MANAGER:-nautilus --new-window}"
 

@@ -9,8 +9,7 @@ set -uo pipefail
 
 MONITOR_LUA="$HOME/.config/hypr/monitor.lua"
 
-# Omarchy's ladder. The top of it is severe on a guest whose display is a
-# window on someone's desk, but the cycle comes back around.
+# Omarchy's ladder, written for real monitors.
 SCALES=(1 1.25 1.6 2 3 4)
 
 case "${1-}" in
@@ -21,16 +20,38 @@ case "${1-}" in
     ;;
 esac
 
-read -r output current < <(hyprctl monitors -j | jq -r '.[] | select(.focused) | "\(.name) \(.scale)"')
+read -r output current width height < <(
+  hyprctl monitors -j | jq -r '.[] | select(.focused) | "\(.name) \(.scale) \(.width) \(.height)"'
+)
 if [[ -z ${output-} ]]; then
   echo "march-display: no focused monitor" >&2
   exit 1
 fi
 
-# Hyprland snaps fractional scales to whatever divides the resolution evenly, so
-# the scale it reports is rarely the one that was asked for: the nearest entry
-# is the one to step from.
-index=$(awk -v current="$current" -v list="${SCALES[*]}" 'BEGIN {
+# Hyprland refuses a scale that does not divide the mode into whole logical
+# pixels, and falls back to 1 when it gets one. A guest's height is whatever
+# the host window happens to be — 2234 here — so most of the ladder above is
+# not applicable to it, and cycling blind lands on 1 and stays there: every
+# further step asks for another scale Hyprland will not take. So the ladder is
+# filtered against this mode first and only what applies is cycled. On a
+# 3456x2234 guest that leaves 1 and 2, which is the honest answer.
+usable=()
+for s in "${SCALES[@]}"; do
+  if awk -v w="$width" -v h="$height" -v s="$s" 'BEGIN {
+    lw = w / s; lh = h / s
+    dw = lw - int(lw); if (dw > 0.5) dw = 1 - dw
+    dh = lh - int(lh); if (dh > 0.5) dh = 1 - dh
+    exit !(dw < 1e-6 && dh < 1e-6)
+  }'; then
+    usable+=("$s")
+  fi
+done
+((${#usable[@]} > 0)) || usable=(1)
+
+# The scale Hyprland reports is the one it applied, which after a rejection is
+# not one that was ever asked for: the nearest usable entry is the one to step
+# from.
+index=$(awk -v current="$current" -v list="${usable[*]}" 'BEGIN {
   n = split(list, scales, " ")
   best = 0; best_diff = 1e9
   for (i = 1; i <= n; i++) {
@@ -41,11 +62,11 @@ index=$(awk -v current="$current" -v list="${SCALES[*]}" 'BEGIN {
 }')
 
 if [[ ${2-} == "--reverse" ]]; then
-  index=$(((index - 1 + ${#SCALES[@]}) % ${#SCALES[@]}))
+  index=$(((index - 1 + ${#usable[@]}) % ${#usable[@]}))
 else
-  index=$(((index + 1) % ${#SCALES[@]}))
+  index=$(((index + 1) % ${#usable[@]}))
 fi
-scale="${SCALES[$index]}"
+scale="${usable[$index]}"
 
 hyprctl eval "hl.monitor({ output = \"$output\", mode = \"preferred\", position = \"auto\", scale = $scale })" >/dev/null
 

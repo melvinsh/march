@@ -236,7 +236,10 @@ contains chrome:headless-render '<body>' \
 app launch-terminal 'Alacritty' 30 march-launch terminal
 app launch-files 'nautilus' 45 march-launch files
 app chrome-launch 'google-chrome' 120 march-launch browser
-app chrome-webapp 'google-chrome' 120 march-launch webapp https://example.com
+# A web app is not a browser window: Chromium's --app names the surface after
+# the URL it opens (chrome-example.com__-Default), which is the whole point of
+# the mode and what makes it look like an application to the compositor.
+app chrome-webapp 'chrome-example' 120 march-launch webapp https://example.com
 
 # Media and documents need something to open, so make one of each.
 # Big and high-contrast on purpose: this image is what the OCR check reads back
@@ -468,7 +471,9 @@ else
 fi
 
 # A row's condition really hides it: nothing is recording, so Stop is absent.
-if ! grep -q 'Stop recording' "$WORK/log/menu-capture" 2>/dev/null; then
+# The record rows are their own branch, so the list to read is capture.record's.
+FUZZEL_LOG="$WORK/log/menu-record" FUZZEL_PICK=99 march-menu capture.record >/dev/null 2>&1
+if ! grep -q 'Stop recording' "$WORK/log/menu-record" 2>/dev/null; then
   pass menu:condition-hides
 else
   fail menu:condition-hides "Stop recording is offered while nothing records"
@@ -477,7 +482,7 @@ fi
 # And appears once something is.
 march-capture record >/dev/null 2>&1
 sleep 4
-FUZZEL_LOG="$WORK/log/menu-recording" FUZZEL_PICK=99 march-menu capture >/dev/null 2>&1
+FUZZEL_LOG="$WORK/log/menu-recording" FUZZEL_PICK=99 march-menu capture.record >/dev/null 2>&1
 if grep -q 'Stop recording' "$WORK/log/menu-recording" 2>/dev/null; then
   pass menu:condition-shows
 else

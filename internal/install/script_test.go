@@ -1687,3 +1687,32 @@ func TestOmittedPackagesAreNotAlsoInstalled(t *testing.T) {
 		}
 	}
 }
+
+// march-launch's fallbacks run whenever it is called from outside the session
+// apps.lua sets up: over ssh, from a TTY, or from the end-to-end suite. A
+// browser default without Chrome's flags picks X11, finds no display and exits
+// before it maps a window, so the default has to carry the same flags the
+// desktop entry does.
+func TestLaunchFallbacksCanActuallyOpenAWindow(t *testing.T) {
+	b, err := HyprlandAsset("bin/march-launch")
+	if err != nil {
+		t.Fatalf("march-launch is not embedded: %v", err)
+	}
+	launch := string(b)
+
+	var fallback string
+	for _, line := range strings.Split(launch, "\n") {
+		if strings.HasPrefix(line, "BROWSER=") {
+			fallback = line
+			break
+		}
+	}
+	if fallback == "" {
+		t.Fatal("march-launch names no browser fallback")
+	}
+	for _, flag := range strings.Fields(chromeFlags) {
+		if !strings.Contains(fallback, flag) {
+			t.Errorf("the browser fallback is missing %s:\n%s", flag, fallback)
+		}
+	}
+}
