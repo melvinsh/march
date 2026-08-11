@@ -1,0 +1,211 @@
+package install
+
+import (
+	"embed"
+	"fmt"
+	"io/fs"
+	"path"
+	"sort"
+	"strings"
+)
+
+// hyprlandAssets holds the Hyprland desktop's configuration, derived from
+// Omarchy v3.8.4. See assets/hyprland/NOTICE for provenance and the changes
+// made for aarch64 and software rendering.
+//
+//go:embed assets/hyprland
+var hyprlandAssets embed.FS
+
+// hyprlandPackages is the desktop itself. Every entry is packaged for aarch64
+// in Arch Linux ARM's repositories — Omarchy's own packages are not, which is
+// why its menu, launcher and helper binaries are substituted rather than
+// installed.
+var hyprlandPackages = []string{
+	// Compositor and session
+	"hyprland", "xdg-desktop-portal-hyprland", "qt6-wayland",
+	"hyprlock", "hypridle", "hyprpicker",
+	"sddm", "polkit-gnome",
+
+	// Bar, launcher, notifications, on-screen display
+	"waybar", "fuzzel", "mako", "swayosd", "swaybg",
+
+	// The programs the keybindings actually invoke
+	"alacritty", "nautilus", "chromium",
+	"grim", "slurp", "wl-clipboard",
+	"wiremix", "btop", "jq", "brightnessctl", "playerctl",
+
+	// Fonts and icons the bar and launcher expect
+	"ttf-jetbrains-mono-nerd", "papirus-icon-theme",
+}
+
+// guestConfigRoot is where the Hyprland config lands. Writing to /etc/skel
+// means useradd copies it into the new account, so the files belong to the user
+// and can be edited without root.
+const guestConfigRoot = "/etc/skel"
+
+// hyprlandFileMap maps each embedded asset to its path in the guest.
+var hyprlandFileMap = map[string]string{
+	"hyprland.conf":       guestConfigRoot + "/.config/hypr/hyprland.conf",
+	"bindings.conf":       guestConfigRoot + "/.config/hypr/bindings.conf",
+	"looknfeel.conf":      guestConfigRoot + "/.config/hypr/looknfeel.conf",
+	"apps.conf":           guestConfigRoot + "/.config/hypr/apps.conf",
+	"envs.conf":           guestConfigRoot + "/.config/hypr/envs.conf",
+	"waybar/config.jsonc": guestConfigRoot + "/.config/waybar/config.jsonc",
+	"waybar/style.css":    guestConfigRoot + "/.config/waybar/style.css",
+	"fuzzel.ini":          guestConfigRoot + "/.config/fuzzel/fuzzel.ini",
+	"mako.conf":           guestConfigRoot + "/.config/mako/config",
+
+	// Helpers replacing Omarchy's menu binaries; on PATH for every user.
+	"bin/march-keybindings": "/usr/local/bin/march-keybindings",
+	"bin/march-powermenu":   "/usr/local/bin/march-powermenu",
+}
+
+// HyprlandAsset returns one embedded configuration file, so tests can assert on
+// exactly what the guest will receive.
+func HyprlandAsset(name string) (string, error) {
+	b, err := hyprlandAssets.ReadFile(path.Join("assets/hyprland", name))
+	if err != nil {
+		return "", fmt.Errorf("reading Hyprland asset %q: %w", name, err)
+	}
+	return string(b), nil
+}
+
+// HyprlandAssetNames lists every embedded asset that is written to the guest.
+func HyprlandAssetNames() []string {
+	names := make([]string, 0, len(hyprlandFileMap))
+	for name := range hyprlandFileMap {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// hyprlandConfigSnippet renders the shell that writes every asset into the
+// guest. Each file is emitted as a quoted heredoc so its contents reach the
+// guest byte for byte, with no shell expansion.
+func hyprlandConfigSnippet(p Profile) string {
+	var b strings.Builder
+
+	b.WriteString("# Hyprland configuration, derived from Omarchy (see march's NOTICE).\n")
+	for _, name := range HyprlandAssetNames() {
+		dest := hyprlandFileMap[name]
+		content, err := HyprlandAsset(name)
+		if err != nil {
+			// The assets are embedded at build time, so this cannot happen
+			// unless the map and the directory have drifted apart.
+			panic(err)
+		}
+
+		fmt.Fprintf(&b, "mkdir -p %s\n", shellQuote(path.Dir(dest)))
+		// EOF markers are unique per file so a file that happens to contain the
+		// word cannot terminate its own heredoc early.
+		marker := heredocMarker(name)
+		fmt.Fprintf(&b, "cat > %s <<'%s'\n", shellQuote(dest), marker)
+		b.WriteString(content)
+		if !strings.HasSuffix(content, "\n") {
+			b.WriteString("\n")
+		}
+		fmt.Fprintf(&b, "%s\n", marker)
+		if strings.HasPrefix(dest, "/usr/local/bin/") {
+			fmt.Fprintf(&b, "chmod 0755 %s\n", shellQuote(dest))
+		}
+	}
+
+	// Visual effects depend on how the guest renders, which is a property of
+	// the machine rather than of Omarchy's configuration.
+	fmt.Fprintf(&b, "cat > %s <<'MARCHEFFECTS'\n", guestConfigRoot+"/.config/hypr/effects.conf")
+	b.WriteString(hyprlandEffectsConfig(p))
+	b.WriteString("MARCHEFFECTS\n")
+
+	// The monitor line is generated rather than embedded: the resolution and
+	// scale are march's, not Omarchy's.
+	fmt.Fprintf(&b, "cat > %s <<'MARCHMONITOR'\n", guestConfigRoot+"/.config/hypr/monitor.conf")
+	b.WriteString(hyprlandMonitorConfig(p))
+	b.WriteString("MARCHMONITOR\n")
+
+	return b.String()
+}
+
+// hyprlandMonitorConfig sets the display scale. Wayland scales in the
+// compositor rather than through GDK_SCALE, so this replaces the X11 scaling
+// path entirely for Hyprland.
+func hyprlandMonitorConfig(p Profile) string {
+	scale := p.scaleFactor()
+	return fmt.Sprintf(`# Written by march. "preferred" follows whatever resolution QEMU reports,
+# so the desktop tracks the window rather than being pinned to one size.
+monitor = ,preferred,auto,%d
+`, scale)
+}
+
+// hyprlandEffectsConfig restores Omarchy's blur, shadows and animations when
+// the guest has real hardware rendering, and leaves them off when every frame
+// would otherwise be drawn on the CPU.
+func hyprlandEffectsConfig(p Profile) string {
+	if !p.GPUAccelerated {
+		return `# This guest renders in software (llvmpipe), so Omarchy's blur, shadows and
+# animations stay off — on the CPU they cost far more than they are worth.
+# Installing march's accelerated QEMU turns them back on automatically.
+`
+	}
+	return `# This guest renders on the host GPU, so Omarchy's effects are restored.
+decoration {
+    rounding = 0
+
+    shadow {
+        enabled = true
+        range = 2
+        render_power = 3
+        color = rgba(1a1a1aee)
+    }
+
+    blur {
+        enabled = true
+        size = 2
+        passes = 2
+        special = true
+        brightness = 0.60
+        contrast = 0.75
+    }
+}
+
+animations {
+    enabled = true
+
+    bezier = easeOutQuint,0.23,1,0.32,1
+    bezier = easeInOutCubic,0.65,0.05,0.36,1
+    bezier = linear,0,0,1,1
+    bezier = almostLinear,0.5,0.5,0.75,1.0
+    bezier = quick,0.15,0,0.1,1
+
+    animation = global, 1, 10, default
+    animation = border, 1, 5.39, easeOutQuint
+    animation = windows, 1, 3.79, easeOutQuint
+    animation = windowsIn, 1, 4.1, easeOutQuint, popin 87%
+    animation = windowsOut, 1, 1.49, linear, popin 87%
+    animation = fadeIn, 1, 1.73, almostLinear
+    animation = fadeOut, 1, 1.46, almostLinear
+    animation = fade, 1, 3.03, quick
+    animation = layers, 1, 3.81, easeOutQuint
+    animation = layersIn, 1, 4, easeOutQuint, fade
+    animation = layersOut, 1, 1.5, linear, fade
+    animation = workspaces, 0, 0, ease
+    animation = specialWorkspace, 1, 3, easeOutQuint, slidevert
+}
+`
+}
+
+// heredocMarker derives a unique, shell-safe terminator from a file name.
+func heredocMarker(name string) string {
+	upper := strings.ToUpper(name)
+	upper = strings.NewReplacer("/", "_", ".", "_", "-", "_").Replace(upper)
+	return "MARCH_" + upper
+}
+
+// hyprlandAssetsValid reports whether every mapped asset actually exists in the
+// embedded filesystem. Used by tests to catch a rename that would otherwise
+// only fail during a real install.
+func hyprlandAssetsValid() error {
+	return fs.WalkDir(hyprlandAssets, "assets/hyprland", func(p string, d fs.DirEntry, err error) error {
+		return err
+	})
+}

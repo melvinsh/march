@@ -1,0 +1,38 @@
+virglrenderer-macos-venus-transport.patch
+=========================================
+
+Three fixes that let virglrenderer's Venus render server start on macOS.
+They apply on top of the startergo/virglrenderer tap's macOS patch series,
+which already contains the length-prefixed framing these depend on.
+
+1-2. src/proxy/proxy_socket.c, server/render_socket.c
+
+     The tap's series added framing for platforms without SOCK_SEQPACKET and
+     wrote the socket-type selection as:
+
+         #ifdef __APPLE__
+            int type = SOCK_SEQPACKET;
+         #else
+            int type = SOCK_SEQPACKET;
+         #endif
+
+     Both branches are identical, so the Apple branch never took effect and
+     socketpair() failed with EPROTONOSUPPORT — Darwin's AF_UNIX has no
+     SOCK_SEQPACKET. QEMU then aborted virgl initialization during guest
+     firmware init, so a VM with venus=on never booted at all.
+
+3.   server/render_worker.c
+
+     create_sigchld_fd() treated a failed fcntl(F_SETFL, O_NONBLOCK) on a
+     kqueue descriptor as fatal. kqueue descriptors do not support F_GETFL or
+     F_SETFL, so this always failed, the worker jail was never created, and
+     the render server died immediately after spawning. The flag is also
+     unnecessary: the only kevent() wait in that file already passes an
+     explicit timeout.
+
+Status
+------
+With these applied, Venus starts: the render server spawns, the guest's Venus
+context is created, and blob resources are created. Venus is still not usable
+on Apple Silicon, for a reason none of this addresses — see the README section
+"Venus, and why it cannot run on macOS".

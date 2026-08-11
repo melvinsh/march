@@ -1,0 +1,11 @@
+#!/bin/bash
+# Power menu, standing in for Omarchy's omarchy-menu system.
+choice=$(printf 'Lock\nLog out\nSuspend\nReboot\nShut down\n' |
+  fuzzel --dmenu --prompt "power> " --lines 5)
+case "$choice" in
+  Lock)      hyprlock ;;
+  "Log out") hyprctl dispatch exit ;;
+  Suspend)   systemctl suspend ;;
+  Reboot)    systemctl reboot ;;
+  "Shut down") systemctl poweroff ;;
+esac

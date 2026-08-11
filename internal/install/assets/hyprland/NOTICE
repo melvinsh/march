@@ -1,0 +1,26 @@
+The Hyprland, Waybar and keybinding configuration in this directory is derived
+from Omarchy, at tag v3.8.4.
+
+    https://github.com/basecamp/omarchy
+    Copyright (c) David Heinemeier Hansson
+    MIT licence — see the upstream LICENSE file.
+
+Changes made for march:
+
+  * Bindings that invoke Omarchy's own binaries (omarchy-menu, omarchy-launch-*,
+    omarchy-toggle-*, omarchy-capture-*, voxtype, ...) are either repointed at
+    equivalents packaged for Arch Linux ARM or dropped. None of Omarchy's own
+    packages are built for aarch64, so keeping them would produce shortcuts that
+    silently do nothing.
+
+  * The app launcher is fuzzel rather than walker: walker and its elephant
+    backend have no aarch64 package.
+
+  * Blur, shadows and animations are disabled. march's VMs have no GPU
+    passthrough, so Mesa renders in software via llvmpipe and these effects cost
+    far more than they are worth.
+
+  * Laptop-only bindings (lid switch, touchpad toggles, keyboard backlight) are
+    removed, having no meaning in a virtual machine.
+
+  * Theme-switching machinery is omitted; march ships a single look.

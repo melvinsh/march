@@ -1,0 +1,51 @@
+--- a/src/proxy/proxy_socket.c
++++ b/src/proxy/proxy_socket.c
+@@ -43,7 +43,9 @@
+ proxy_socket_pair(int out_fds[static 2])
+ {
+ #ifdef __APPLE__
+-   int type = SOCK_SEQPACKET;
++   /* Darwin AF_UNIX has no SOCK_SEQPACKET; the length-prefixed framing
++    * below makes a stream socket carry the same message boundaries. */
++   int type = SOCK_STREAM;
+ #else
+    int type = SOCK_SEQPACKET;
+ #endif
+--- a/server/render_socket.c
++++ b/server/render_socket.c
+@@ -53,7 +53,9 @@
+ render_socket_pair(int out_fds[static 2])
+ {
+ #ifdef __APPLE__
+-   int type = SOCK_SEQPACKET;
++   /* Darwin AF_UNIX has no SOCK_SEQPACKET; the length-prefixed framing
++    * below makes a stream socket carry the same message boundaries. */
++   int type = SOCK_STREAM;
+ #else
+    int type = SOCK_SEQPACKET;
+ #endif
+--- a/server/render_worker.c
++++ b/server/render_worker.c
+@@ -199,13 +199,15 @@
+       return -1;
+    }
+ 
+-   /* Set kqueue to non-blocking mode */
+-   int flags = fcntl(kq, F_GETFL);
+-   if (flags == -1 || fcntl(kq, F_SETFL, flags | O_NONBLOCK) == -1) {
+-      render_log("failed to set kqueue non-blocking");
+-      close(kq);
+-      return -1;
+-   }
++   /* A kqueue descriptor does not support F_GETFL/F_SETFL, so this always
++    * fails on macOS. It is also unnecessary: the only kevent() wait in this
++    * file passes an explicit timeout, which is how a kqueue is polled without
++    * blocking. Treating the failure as fatal is what kept the worker jail —
++    * and with it the whole render server — from ever starting.
++    */
++   const int flags = fcntl(kq, F_GETFL);
++   if (flags == -1 || fcntl(kq, F_SETFL, flags | O_NONBLOCK) == -1)
++      render_log("kqueue does not accept O_NONBLOCK; polling with a timeout instead");
+ 
+    return kq;
+ }

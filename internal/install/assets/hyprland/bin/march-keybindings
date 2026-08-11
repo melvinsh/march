@@ -1,0 +1,31 @@
+#!/bin/bash
+# Show every keybinding in a fuzzel list. Omarchy binds SUPER+K to its own menu
+# for this.
+#
+# The list is read from Hyprland itself rather than from the config file, so it
+# can never drift from the bindings actually in effect. Modifier decoding is
+# done in jq to avoid depending on gawk's bitwise functions.
+#
+#   --list   print to stdout instead of opening the launcher
+set -euo pipefail
+
+list() {
+  hyprctl -j binds | jq -r '
+    .[]
+    | select(.description != "")
+    | .modmask as $m
+    | (
+        (if ((($m / 64) | floor) % 2) == 1 then "SUPER + " else "" end) +
+        (if ((($m /  4) | floor) % 2) == 1 then "CTRL + "  else "" end) +
+        (if ((($m /  8) | floor) % 2) == 1 then "ALT + "   else "" end) +
+        (if (($m % 2))                == 1 then "SHIFT + " else "" end)
+      ) as $mods
+    | "\($mods)\(.key)\t\(.description)"
+  ' | sort -u
+}
+
+if [[ ${1-} == "--list" ]]; then
+  list
+else
+  list | column -t -s $'\t' | fuzzel --dmenu --prompt "keys> " --lines 20 >/dev/null
+fi

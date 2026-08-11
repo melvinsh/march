@@ -1,0 +1,5 @@
+# Release tarballs are built by `make dist`, not committed.
+/dist/
+
+# Local build output
+/march

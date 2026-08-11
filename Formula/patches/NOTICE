@@ -1,0 +1,16 @@
+qemu-11.0.3-macos-gl.patch
+
+Teaches QEMU's Cocoa display to render through OpenGL on macOS, which is what
+makes the virtio-gpu-gl device usable and gives guests hardware-accelerated
+graphics via ANGLE and Metal.
+
+Derived from Akihiko Odaki's macOS virgl work, by way of the patch carried in
+https://github.com/startergo/homebrew-qemu-virgl-kosmickrisp, rebased onto the
+QEMU 11.0.3 release. Upstream QEMU has not merged this work.
+
+Rebasing notes: the upstream patch also carries CoreAudio changes, SDL support
+and an EGL refactor. None are needed here — march uses the Cocoa display and
+does not rely on QEMU for audio — and none applied cleanly to 11.0.3, so this
+patch contains only the hunks that did: the OpenGL display plumbing.
+
+QEMU is GPL-2.0-only; this patch inherits that licence.

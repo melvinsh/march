@@ -1,0 +1,49 @@
+/* Top bar styling, after Omarchy v3.8.4 (see NOTICE). */
+
+* {
+  font-family: "JetBrainsMono Nerd Font", monospace;
+  font-size: 12px;
+  min-height: 0;
+}
+
+window#waybar {
+  background: #1a1b26;
+  color: #c0caf5;
+}
+
+#workspaces button {
+  color: #565f89;
+  padding: 0 6px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+}
+
+#workspaces button.active {
+  color: #7dcfff;
+}
+
+#workspaces button:hover {
+  color: #c0caf5;
+  background: #283457;
+}
+
+#custom-launcher {
+  color: #7dcfff;
+  padding: 0 12px 0 10px;
+  font-size: 14px;
+}
+
+#clock {
+  color: #c0caf5;
+  font-weight: bold;
+}
+
+#network, #pulseaudio, #cpu, #memory, #tray {
+  padding: 0 8px;
+  color: #a9b1d6;
+}
+
+#network.disconnected {
+  color: #f7768e;
+}
