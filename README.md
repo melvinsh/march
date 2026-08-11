@@ -20,13 +20,26 @@ and Huh.
 
 ## Install
 
-On macOS, one command brings the whole stack — march itself and the patched
-QEMU that gives guests [hardware-accelerated graphics](#hardware-acceleration):
+On macOS, this brings the whole stack — march itself and the patched QEMU that
+gives guests [hardware-accelerated graphics](#hardware-acceleration):
 
 ```sh
-brew tap melvinsh/march https://github.com/melvinsh/march
+brew trust melvinsh/march
 brew install melvinsh/march/march
 march
+```
+
+The `brew trust` line is not optional. Homebrew refuses to load formulae from
+untrusted third-party taps, and march's QEMU lives in the same tap — so without
+it the install stops partway with *"Refusing to load formula
+melvinsh/march/qemu-march from untrusted tap"*. Trusting the tap covers both
+formulae; it also taps the repository, so no separate `brew tap` is needed.
+
+The GPU stack comes from the `startergo` taps, which Homebrew adds
+automatically as dependencies. If it reports those as untrusted too:
+
+```sh
+brew trust startergo/angle startergo/libepoxy startergo/virglrenderer
 ```
 
 Or build it yourself, bringing your own QEMU. aarch64 support and UEFI firmware
