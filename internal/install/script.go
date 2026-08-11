@@ -64,8 +64,15 @@ const baseKernel = "linux-aarch64"
 var vulkanPackages = []string{"vulkan-virtio", "vulkan-icd-loader"}
 
 // basePackages are installed on every machine, desktop or not.
+//
+// linux-firmware is deliberately absent. It is a metapackage pulling twelve
+// vendor blob sets — nvidia, intel, atheros, mediatek, realtek and the rest —
+// which is 277 MB of the base download and about a gigabyte on disk, for
+// hardware that does not exist behind QEMU's virt machine. Only board kernels
+// such as linux-odroid-n2 depend on it; linux-aarch64 does not, so leaving it
+// out really leaves it out.
 var basePackages = []string{
-	"base", baseKernel, "linux-firmware",
+	"base", baseKernel,
 	"systemd", "sudo", "networkmanager",
 	"grub", "efibootmgr", "dosfstools",
 	"nano", "vim", "less", "openssh",
@@ -117,6 +124,9 @@ func Script(p Profile) (string, error) {
 		allDesktop = append(allDesktop, graphicsPackages...)
 	}
 	allDesktop = append(allDesktop, desktopPkgs...)
+	// The general toolset goes in with the desktop rather than the base, so a
+	// failure here cannot leave a machine without a bootable base system.
+	allDesktop = append(allDesktop, standardPackages...)
 	if p.VulkanAccelerated {
 		allDesktop = append(allDesktop, vulkanPackages...)
 	}
@@ -228,6 +238,10 @@ func Script(p Profile) (string, error) {
 		w(``)
 	}
 	w(`useradd -m -G wheel,video,audio,input -s /bin/bash %s`, shellQuote(p.Username))
+	// Without this every docker command needs sudo. The group comes from the
+	// docker package, so it is guarded rather than assumed: a missing group
+	// should not abort an otherwise good install.
+	w(`getent group docker >/dev/null && usermod -aG docker %s || true`, shellQuote(p.Username))
 	w(`printf '%%s:%%s\n' %s %s | chpasswd`, shellQuote(p.Username), shellQuote(p.Password))
 	w(`printf '%%s:%%s\n' root %s | chpasswd`, shellQuote(p.Password))
 	w(`echo '%%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/10-wheel`)
@@ -252,6 +266,7 @@ func Script(p Profile) (string, error) {
 	w(`systemctl enable %s`, displayManager)
 	w(`systemctl set-default graphical.target`)
 	w(``)
+	b.WriteString(standardServicesSnippet())
 	b.WriteString(scalingSnippet(p))
 	b.WriteString(autologinSnippet(displayManager, session, p))
 	b.WriteString(autoResizeSnippet(p))
@@ -340,6 +355,48 @@ autologin-user-timeout=0
 LIGHTDM
 `, user, p.Username, session)
 	}
+}
+
+// standardServicesSnippet turns on the parts of the standard toolset that do
+// nothing until they are enabled or configured, and deliberately leaves the
+// rest alone. It follows Omarchy's install/config scripts, diverging where a
+// virtual machine differs from the laptop they were written for.
+func standardServicesSnippet() string {
+	var b strings.Builder
+	w := func(format string, args ...any) {
+		fmt.Fprintf(&b, format+"\n", args...)
+	}
+
+	// Enabled, not started: the guest reboots at the end of the install.
+	//
+	// Everything march installs that has a service has it turned on here. The
+	// services Omarchy enables that march does not — avahi, cups-browsed,
+	// bluetooth, power-profiles-daemon — are missing because the packages are
+	// missing, for the reasons in omittedForVirtualHardware.
+	w(`systemctl enable cups.socket`)
+	w(`systemctl enable docker.socket`)
+	w(`systemctl enable plocate-updatedb.timer`)
+	// Ships with kernel-modules-hook.
+	w(`systemctl enable linux-modules-cleanup.service`)
+	w(``)
+
+	// Omarchy's firewall defaults, plus the one rule march cannot do without:
+	// it forwards a host port to the guest's sshd and prints the resulting ssh
+	// command on the detail screen. Omarchy has no such forward, so its
+	// "default deny incoming" would quietly break a feature march advertises.
+	//
+	// The rules are written here but applying them is left to the service on
+	// first boot: inside the chroot there is no netfilter to load them into,
+	// so `ufw enable` reports a failure that says nothing about the installed
+	// system.
+	w(`ufw default deny incoming || true`)
+	w(`ufw default allow outgoing || true`)
+	w(`ufw allow 22/tcp || true`)
+	w(`sed -i 's/^ENABLED=.*/ENABLED=yes/' /etc/ufw/ufw.conf`)
+	w(`systemctl enable ufw.service`)
+	w(``)
+
+	return b.String()
 }
 
 // desktopConfigSnippet writes any desktop-specific configuration into

@@ -173,6 +173,42 @@ The chosen user is logged in automatically — via a LightDM/SDDM drop-in or
 GDM's `custom.conf` — so the machine really does land on a desktop rather than
 a login screen.
 
+### The standard toolset
+
+A guest comes with the tools Omarchy ships, so it is a working machine on first
+boot rather than a bare Arch install: `git`, `neovim`, `lazygit`, `ripgrep`,
+`fd`, `fzf`, `bat`, `eza`, `zoxide`, `starship`, `tmux`, `docker` (with the
+account already in the group), `mpv`, `imv`, `evince`, LibreOffice, GNOME Disks,
+and the rest of the list in `internal/install/standard.go`.
+
+**Nothing is installed that this hardware cannot run.** A package whose device
+does not exist is a command that fails, a daemon that idles, and download time
+paid on every install. So march omits what Omarchy ships for real laptops —
+`bluez` (no controller), `ddcutil` (no DDC channel), `power-profiles-daemon` (no
+battery), `wireless-regdb` (no radio), `avahi` and `cups-browsed` (multicast
+does not cross QEMU's NAT), `gpu-screen-recorder` (no hardware encoder),
+`hyprsunset` (no DRM gamma ramp), `gvfs-mtp` (no USB passthrough). Each omission
+carries its reason in `omittedForVirtualHardware`, and a test fails if one of
+them creeps back in.
+
+Printing works the one way it can from behind user-mode networking: CUPS with
+`cups-pdf`, so **Print** always has somewhere to go.
+
+`linux-firmware` is gone for the same reason — 277 MB of vendor blobs for
+hardware that is not there, which was the single largest thing march downloaded.
+
+### Sound
+
+Guests get an Intel HDA card and a full PipeWire stack, so the volume keys and
+`SUPER + CTRL + A` do something. The card is HDA rather than virtio-sound,
+which would otherwise fit march's paravirtual hardware better: Arch Linux ARM's
+kernel ships no `virtio_snd` module, so a virtio card would enumerate in the
+guest with no driver to bind it.
+
+A machine with no window gets the same card on QEMU's null backend — the guest
+sees identical hardware either way, and nothing opens a CoreAudio device for a
+VM nobody is listening to.
+
 ### The window
 
 QEMU opens VMs at a cramped 1280×800 by default. march sizes the guest from

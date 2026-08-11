@@ -116,6 +116,7 @@ func Build(v config.VM, caps *host.Caps, p config.Paths, opts BuildOptions) ([]s
 
 	a.addAll(netArgs(v))
 	a.addAll(consoleArgs(v, caps, p, installing))
+	a.addAll(audioArgs(v, caps, installing))
 
 	if v.RNG {
 		// A virtio RNG keeps the guest from stalling on entropy during boot,
@@ -253,6 +254,34 @@ func netArgs(v config.VM) []string {
 	return []string{
 		"-netdev", strings.Join(netdev, ","),
 		"-device", strings.Join(dev, ","),
+	}
+}
+
+// audioArgs gives the guest a sound card.
+//
+// The device is Intel HDA rather than virtio-sound, which would otherwise be
+// the obvious choice next to the rest of march's paravirtual hardware: Arch
+// Linux ARM's kernel package ships no virtio_snd module, so a virtio-sound-pci
+// would enumerate in the guest and then sit there with no driver bound to it.
+// snd-hda-intel is present, and hda is what QEMU has supported longest.
+//
+// A machine with no window gets the same card wired to the null backend. The
+// guest still sees a complete sound stack — which is what keeps a headless
+// install identical to a windowed one — while nothing opens a CoreAudio device
+// for a VM nobody is listening to.
+func audioArgs(v config.VM, caps *host.Caps, installing bool) []string {
+	if !caps.HasDevice("ich9-intel-hda") || !caps.HasDevice("hda-duplex") {
+		return nil
+	}
+
+	driver := "coreaudio"
+	if v.Display == config.DisplayNone || installing {
+		driver = "none"
+	}
+	return []string{
+		"-audiodev", driver + ",id=snd0",
+		"-device", "ich9-intel-hda",
+		"-device", "hda-duplex,audiodev=snd0",
 	}
 }
 

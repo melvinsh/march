@@ -1335,3 +1335,142 @@ func TestVulkanPackagesFollowTheHost(t *testing.T) {
 		}
 	}
 }
+
+// The standard toolset is what makes a march guest feel like a finished
+// machine rather than a bare Arch install, so every package in it has to
+// actually reach pacstrap.
+func TestStandardPackagesAreInstalled(t *testing.T) {
+	s := mustScript(t, testProfile())
+
+	pacstrap := ""
+	for _, line := range strings.Split(s, "\n") {
+		if strings.HasPrefix(line, "pacstrap /mnt ") {
+			pacstrap = line
+		}
+	}
+	if pacstrap == "" {
+		t.Fatal("no desktop pacstrap line in the script")
+	}
+	installed := map[string]bool{}
+	for _, f := range strings.Fields(pacstrap) {
+		installed[f] = true
+	}
+	for _, pkg := range standardPackages {
+		if !installed[pkg] {
+			t.Errorf("%q is in standardPackages but never installed", pkg)
+		}
+	}
+}
+
+// They are the distro's tools, not the compositor's: a guest running XFCE
+// should have git and ripgrep just as much as one running Hyprland.
+func TestStandardPackagesReachEveryDesktop(t *testing.T) {
+	for _, d := range Desktops {
+		p := testProfile()
+		p.Desktop = d
+		s := mustScript(t, p)
+		for _, pkg := range []string{"git", "ripgrep", "unzip", "mpv", "docker", "wireplumber"} {
+			if !strings.Contains(s, " "+pkg+" ") && !strings.HasSuffix(s, " "+pkg) {
+				t.Errorf("desktop %q does not install %q", d, pkg)
+			}
+		}
+	}
+}
+
+// linux-firmware is 277 MB of vendor blobs for hardware that does not exist
+// behind QEMU's virt machine, and it was the single largest thing march
+// downloaded.
+func TestFirmwareBlobsAreNotInstalled(t *testing.T) {
+	s := mustScript(t, testProfile())
+	if strings.Contains(s, "linux-firmware") {
+		t.Error("linux-firmware is installed; it is a gigabyte of blobs a virtio guest cannot use")
+	}
+	// The kernel itself must still be there — dropping the wrong line would
+	// leave an unbootable machine.
+	if !strings.Contains(s, baseKernel) {
+		t.Errorf("the kernel %q is missing from the base install", baseKernel)
+	}
+}
+
+// Enabling a service whose hardware does not exist turns `systemctl --failed`
+// from a signal into noise.
+func TestNoServicesForAbsentHardware(t *testing.T) {
+	s := mustScript(t, testProfile())
+	for _, unit := range []string{"bluetooth.service", "power-profiles-daemon"} {
+		if strings.Contains(s, "systemctl enable "+unit) {
+			t.Errorf("%s is enabled, but nothing behind virt answers to it", unit)
+		}
+	}
+}
+
+// march forwards a host port to the guest's sshd and prints the ssh command on
+// its detail screen. Omarchy's firewall defaults would silently break that,
+// since Omarchy has no such forward.
+func TestFirewallKeepsSSHReachable(t *testing.T) {
+	s := mustScript(t, testProfile())
+	if !strings.Contains(s, "ufw default deny incoming") {
+		t.Fatal("the firewall is never configured")
+	}
+	deny := strings.Index(s, "ufw default deny incoming")
+	allow := strings.Index(s, "ufw allow 22/tcp")
+	if allow < 0 {
+		t.Fatal("ufw denies incoming traffic without allowing ssh, locking march out of its own VM")
+	}
+	if allow < deny {
+		t.Error("ssh is allowed before the default policy that would override it")
+	}
+	if !strings.Contains(s, "systemctl enable ufw.service") {
+		t.Error("the firewall rules are written but the service never starts")
+	}
+}
+
+// Group membership only takes effect at account creation or later, never
+// before, and docker without it means sudo for every command.
+func TestDockerGroupIsGrantedAfterTheAccountExists(t *testing.T) {
+	s := mustScript(t, testProfile())
+	user := strings.Index(s, "useradd -m")
+	docker := strings.Index(s, "usermod -aG docker")
+	if user < 0 || docker < 0 {
+		t.Fatal("expected both useradd and the docker group grant")
+	}
+	if docker < user {
+		t.Error("the docker group is granted before the account exists")
+	}
+}
+
+// Nothing gets installed that the hardware cannot support. A package whose
+// device does not exist is a command that fails, a daemon that idles, or a
+// unit in `systemctl --failed` — and it is paid for in download time on every
+// single install.
+func TestNothingIsInstalledForHardwareThatIsAbsent(t *testing.T) {
+	for _, d := range Desktops {
+		p := testProfile()
+		p.Desktop = d
+		s := mustScript(t, p)
+
+		for _, pkg := range omittedForVirtualHardware {
+			// Word boundaries: "bluez" must not match "bluez-utils", and a
+			// package name must not match a substring of another.
+			for _, form := range []string{" " + pkg + " ", " " + pkg + "\n"} {
+				if strings.Contains(s, form) {
+					t.Errorf("desktop %q installs %q, which has no hardware behind it in a VM", d, pkg)
+					break
+				}
+			}
+		}
+	}
+}
+
+// The omission list only means something if it is honest about what it covers.
+func TestOmittedPackagesAreNotAlsoInstalled(t *testing.T) {
+	installed := map[string]bool{}
+	for _, pkg := range append(append(append([]string{},
+		basePackages...), standardPackages...), hyprlandPackages...) {
+		installed[pkg] = true
+	}
+	for _, pkg := range omittedForVirtualHardware {
+		if installed[pkg] {
+			t.Errorf("%q is listed as omitted but is also installed", pkg)
+		}
+	}
+}

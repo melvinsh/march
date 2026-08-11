@@ -1,6 +1,7 @@
 package qemu
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -28,6 +29,8 @@ func testCaps() *host.Caps {
 			"qemu-xhci":          true,
 			"usb-kbd":            true,
 			"usb-tablet":         true,
+			"ich9-intel-hda":     true,
+			"hda-duplex":         true,
 		},
 		HostCPUs:   10,
 		HostMemMiB: 32768,
@@ -770,5 +773,86 @@ func TestVenusRequiresEveryPiece(t *testing.T) {
 	args := mustBuild(t, v, caps, BuildOptions{AttachISO: true})
 	if dev := gpuDevice(args); strings.Contains(dev, "venus") {
 		t.Errorf("Venus was requested during install: %q", dev)
+	}
+}
+
+// A guest with no sound card makes the volume keys and the mixer march ships
+// with its desktop into decoration.
+func TestAudioArgs(t *testing.T) {
+	caps := testCaps()
+	v := config.Defaults("arch", caps)
+	v.Display, v.Installed = config.DisplayCocoa, true
+
+	m := argMap(mustBuild(t, v, caps, BuildOptions{}))
+
+	if got := m["-audiodev"]; len(got) != 1 || !strings.HasPrefix(got[0], "coreaudio,") {
+		t.Errorf("-audiodev is %v, want the CoreAudio backend for a windowed guest", got)
+	}
+	var codec string
+	for _, d := range m["-device"] {
+		if strings.HasPrefix(d, "hda-duplex") {
+			codec = d
+		}
+	}
+	if codec == "" {
+		t.Fatalf("no HDA codec was attached: %v", m["-device"])
+	}
+	// The codec has to name the backend, or QEMU attaches it to a default that
+	// may not exist and refuses to start.
+	if !strings.Contains(codec, "audiodev=snd0") {
+		t.Errorf("codec %q does not reference the audiodev id", codec)
+	}
+	if !slices.Contains(m["-device"], "ich9-intel-hda") {
+		t.Errorf("no HDA controller for the codec to sit on: %v", m["-device"])
+	}
+	// virtio-sound would be the natural choice next to march's other devices,
+	// but Arch Linux ARM's kernel ships no virtio_snd module, so the guest
+	// would see a card it cannot drive.
+	for _, d := range m["-device"] {
+		if strings.HasPrefix(d, "virtio-sound") {
+			t.Errorf("virtio-sound has no driver in the guest kernel: %q", d)
+		}
+	}
+}
+
+// A machine nobody is looking at should not open a CoreAudio device on the
+// host, but it must still show the guest the same hardware — otherwise a
+// headless install produces a differently configured system than a windowed one.
+func TestAudioIsSilentWithoutAWindow(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*config.VM)
+	}{
+		{"headless", func(v *config.VM) { v.Display, v.Installed = config.DisplayNone, true }},
+		{"installing", func(v *config.VM) { v.Display, v.Installed = config.DisplayCocoa, false }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			caps := testCaps()
+			v := config.Defaults("arch", caps)
+			v.ISOPath = "/tmp/march-test.iso"
+			tc.mutate(&v)
+
+			m := argMap(mustBuild(t, v, caps, BuildOptions{}))
+			if got := m["-audiodev"]; len(got) != 1 || !strings.HasPrefix(got[0], "none,") {
+				t.Errorf("-audiodev is %v, want the null backend", got)
+			}
+			if !slices.Contains(m["-device"], "ich9-intel-hda") {
+				t.Errorf("the sound card disappeared without a window: %v", m["-device"])
+			}
+		})
+	}
+}
+
+// QEMU refuses to start on an unknown -device, so a host whose build lacks the
+// HDA pieces must simply go without sound.
+func TestAudioIsSkippedWhenTheHostLacksTheDevice(t *testing.T) {
+	caps := testCaps()
+	delete(caps.Devices, "ich9-intel-hda")
+	v := config.Defaults("arch", caps)
+	v.Display, v.Installed = config.DisplayCocoa, true
+
+	m := argMap(mustBuild(t, v, caps, BuildOptions{}))
+	if len(m["-audiodev"]) != 0 {
+		t.Errorf("audio was configured without a device to attach it to: %v", m["-audiodev"])
 	}
 }

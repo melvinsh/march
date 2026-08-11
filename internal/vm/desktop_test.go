@@ -3,6 +3,7 @@ package vm
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -284,6 +285,56 @@ func TestUnattendedDesktopInstall(t *testing.T) {
 	// resolution and the follow-the-window helper must stay out of the way.
 	if out := ask("ls /usr/local/bin/march-autoresize 2>&1"); !strings.Contains(out, "No such file") {
 		t.Errorf("the resize helper was installed for a guest that owns its resolution: %s", out)
+	}
+
+	// The standard toolset. A package that vanished from the repos aborts the
+	// install long before this, so what is being checked here is that the
+	// binaries carry the names the bindings and the docs assume.
+	for _, bin := range []string{"git", "rg", "bat", "eza", "fd", "fzf", "nvim", "mpv", "docker", "tmux", "unzip"} {
+		if out := ask("command -v " + bin + " || echo MISSING"); strings.Contains(out, "MISSING") {
+			t.Errorf("%s is not on PATH in the installed system", bin)
+		}
+	}
+	// Group membership is what separates a usable docker from one that needs
+	// sudo for every command.
+	if groups := ask("id -nG " + profile.Username); !strings.Contains(groups, "docker") {
+		t.Errorf("%s is not in the docker group: %q", profile.Username, groups)
+	}
+
+	// Sound. The guest has an HDA card, but a card alone is silent: pipewire
+	// needs wireplumber to bind it, and march ships volume keys and a mixer
+	// that do nothing without a sink.
+	sinks := ask("sudo -u " + profile.Username + " XDG_RUNTIME_DIR=/run/user/1000 " +
+		"wpctl status 2>&1 | sed -n '/Sinks:/,/^$/p'")
+	if !strings.Contains(sinks, "hda") && !strings.Contains(sinks, "HDA") &&
+		!strings.Contains(sinks, "Built-in") && !strings.Contains(sinks, "Audio") {
+		t.Errorf("pipewire reports no sink, so the guest has no working audio:\n%s", sinks)
+	}
+
+	// The firewall must be up — `ufw status` needs root, which this console
+	// session does not have, so ask systemd instead.
+	if state := ask("systemctl is-enabled ufw 2>&1"); !strings.Contains(state, "enabled") {
+		t.Errorf("the firewall is not enabled: %s", state)
+	}
+
+	// And it must not have closed the one port march forwards. This is checked
+	// from the host rather than in the guest, because reaching sshd on the
+	// forwarded port is exactly the thing march advertises on its detail
+	// screen — a rule that only looks right in `ufw status` is not the claim.
+	if v.SSHPort > 0 {
+		addr := fmt.Sprintf("127.0.0.1:%d", v.SSHPort)
+		conn, err := net.DialTimeout("tcp", addr, 15*time.Second)
+		if err != nil {
+			t.Errorf("ssh on %s is unreachable, so the firewall locked march out of its own VM: %v", addr, err)
+		} else {
+			_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+			banner := make([]byte, 64)
+			n, err := conn.Read(banner)
+			if err != nil || !strings.HasPrefix(string(banner[:n]), "SSH-") {
+				t.Errorf("nothing answering ssh on %s: read %q (%v)", addr, banner[:n], err)
+			}
+			_ = conn.Close()
+		}
 	}
 
 	if failed := ask("systemctl --failed --no-legend --no-pager | head -5"); strings.TrimSpace(failed) != "" {

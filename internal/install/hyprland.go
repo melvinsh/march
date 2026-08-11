@@ -32,7 +32,8 @@ var hyprlandPackages = []string{
 	// The programs the keybindings actually invoke
 	"alacritty", "nautilus", "chromium",
 	"grim", "slurp", "wl-clipboard",
-	"wiremix", "btop", "jq", "brightnessctl", "playerctl",
+	// No brightnessctl: there is no backlight behind virtio-gpu to set.
+	"wiremix", "btop", "jq", "playerctl",
 
 	// Fonts and icons the bar and launcher expect
 	"ttf-jetbrains-mono-nerd", "papirus-icon-theme",
