@@ -791,7 +791,7 @@ func (m *Model) viewInstalling() string {
 	var b strings.Builder
 	b.WriteString("\n" + m.header() + "\n\n")
 	b.WriteString("  " + m.styles.Bold.Render("Installing "+m.pendSpec.Name) + "  " +
-		m.styles.Muted.Render(strings.ToUpper(string(m.pendProfile.Desktop))) + "\n")
+		m.styles.Muted.Render("HYPRLAND") + "\n")
 	b.WriteString("  " + m.styles.Muted.Render(
 		"unattended · "+time.Since(m.installStart).Round(time.Second).String()+" elapsed") + "\n\n")
 
@@ -897,9 +897,6 @@ func (m *Model) detailContent(v config.VM) string {
 		{"Serial", m.mgr.ConsoleCommand(v.Name)},
 		{"Installed", yesNo(v.Installed)},
 		{"Created", v.Created.Local().Format("2006-01-02 15:04")},
-	}
-	if v.Desktop != "" {
-		rows = append(rows, [2]string{"Desktop", strings.ToUpper(v.Desktop)})
 	}
 	if v.Username != "" {
 		rows = append(rows, [2]string{"Account", v.Username + "  (autologin)"})

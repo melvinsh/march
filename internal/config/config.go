@@ -97,10 +97,12 @@ type VM struct {
 	ISOPath   string `json:"iso_path,omitempty"`
 	Installed bool   `json:"installed"`
 
-	// Desktop and Username record what was installed, so the UI can show it.
-	// The account password is deliberately never persisted: it is needed only
-	// while the installer runs and is held in memory for that long.
-	Desktop  string `json:"desktop,omitempty"`
+	// Username records who was installed, so the UI can show it. The account
+	// password is deliberately never persisted: it is needed only while the
+	// installer runs and is held in memory for that long.
+	//
+	// There is no Desktop field: march installs one desktop. A vm.json written
+	// before that was true still carries the key, and it is ignored.
 	Username string `json:"username,omitempty"`
 
 	Created time.Time `json:"created"`

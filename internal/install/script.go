@@ -61,7 +61,11 @@ const baseKernel = "linux-aarch64"
 // This is what gets Chromium off its software rasterizer: the browser renders
 // through ANGLE, whose backend is Vulkan, so a guest with GL but no Vulkan
 // runs its desktop on the GPU and its web pages on the CPU.
-var vulkanPackages = []string{"vulkan-virtio", "vulkan-icd-loader"}
+//
+// Only the driver is here. The loader comes with the browser (chromePackages),
+// because Chrome looks for it whether or not the host forwards Vulkan, and a
+// loader with no driver behind it simply reports no devices.
+var vulkanPackages = []string{"vulkan-virtio"}
 
 // basePackages are installed on every machine, desktop or not.
 //
@@ -82,19 +86,8 @@ var basePackages = []string{
 	"archlinuxarm-keyring",
 }
 
-// graphicsPackages give X a working stack. Under QEMU there is no accelerated
-// GPU, so Mesa's software renderer does the drawing; the modesetting driver
-// picks up virtio-gpu through DRM.
-var graphicsPackages = []string{
-	"xorg-server", "xorg-xinit", "xorg-xrandr",
-	"mesa",
-	"noto-fonts", "noto-fonts-emoji", "ttf-dejavu",
-	"xdg-user-dirs",
-	"network-manager-applet",
-}
-
-// waylandCommonPackages are shared by the Wayland desktops: fonts, portals and
-// the pieces a session needs that are not the compositor itself.
+// waylandCommonPackages are the pieces a session needs that are not the
+// compositor itself: fonts, portals and XWayland.
 var waylandCommonPackages = []string{
 	"mesa", "xorg-xwayland",
 	"noto-fonts", "noto-fonts-emoji", "ttf-dejavu",
@@ -114,16 +107,12 @@ func Script(p Profile) (string, error) {
 	}
 	p = p.withDefaults()
 
-	desktopPkgs, displayManager, session := p.Desktop.packages()
-	// The Xorg stack is only meaningful for the X11 desktops; Hyprland is
-	// Wayland and pulls XWayland itself.
 	var allDesktop []string
-	if p.Desktop == DesktopHyprland {
-		allDesktop = append(allDesktop, waylandCommonPackages...)
-	} else {
-		allDesktop = append(allDesktop, graphicsPackages...)
-	}
-	allDesktop = append(allDesktop, desktopPkgs...)
+	allDesktop = append(allDesktop, waylandCommonPackages...)
+	allDesktop = append(allDesktop, hyprlandPackages...)
+	// Chrome is not a pacman package, so what it links against has to be asked
+	// for by name.
+	allDesktop = append(allDesktop, chromePackages...)
 	// The general toolset goes in with the desktop rather than the base, so a
 	// failure here cannot leave a machine without a bootable base system.
 	allDesktop = append(allDesktop, standardPackages...)
@@ -173,9 +162,12 @@ func Script(p Profile) (string, error) {
 	// just that warning; grep is unusable here because it exits non-zero when
 	// every line is filtered, which pipefail would turn into a failed install.
 	w(`pacman -Sy --noconfirm --disable-download-timeout \`)
+	// libarchive and curl are for Chrome, which is not a pacman package and so
+	// is fetched and unpacked by hand.
 	w(`  arch-install-scripts dosfstools e2fsprogs gptfdisk util-linux coreutils \`)
+	w(`  libarchive curl \`)
 	w(`  2>&1 | sed '/could not get file information for/d'`)
-	w(`for t in pacstrap arch-chroot genfstab sgdisk mkfs.ext4 mkfs.fat; do`)
+	w(`for t in pacstrap arch-chroot genfstab sgdisk mkfs.ext4 mkfs.fat bsdtar curl; do`)
 	w(`  command -v "$t" >/dev/null || { echo "march: $t is still missing"; exit 1; }`)
 	w(`done`)
 	w(``)
@@ -209,6 +201,8 @@ func Script(p Profile) (string, error) {
 	w(`phase %s`, PhaseDesktop)
 	w(`pacstrap /mnt %s`, strings.Join(allDesktop, " "))
 	w(``)
+	b.WriteString(chromeSnippet())
+	w(``)
 
 	// --- configure ---------------------------------------------------------
 	w(`phase %s`, PhaseConfigure)
@@ -233,10 +227,9 @@ func Script(p Profile) (string, error) {
 	w(``)
 	// The desktop's configuration goes into /etc/skel first, so useradd copies
 	// it into the new account and the files belong to the user.
-	if snippet := desktopConfigSnippet(p); snippet != "" {
-		b.WriteString(snippet)
-		w(``)
-	}
+	b.WriteString(hyprlandConfigSnippet(p))
+	b.WriteString(chromeDefaultsSnippet())
+	w(``)
 	w(`useradd -m -G wheel,video,audio,input -s /bin/bash %s`, shellQuote(p.Username))
 	// Without this every docker command needs sudo. The group comes from the
 	// docker package, so it is guarded rather than assumed: a missing group
@@ -268,8 +261,7 @@ func Script(p Profile) (string, error) {
 	w(``)
 	b.WriteString(standardServicesSnippet())
 	b.WriteString(scalingSnippet(p))
-	b.WriteString(autologinSnippet(displayManager, session, p))
-	b.WriteString(autoResizeSnippet(p))
+	b.WriteString(autologinSnippet(p))
 	w(`MARCH_CHROOT`)
 	w(``)
 
@@ -300,32 +292,16 @@ func Script(p Profile) (string, error) {
 	return b.String(), nil
 }
 
-// autologinSnippet configures the display manager to log the user straight in,
-// so the machine really does land on a desktop unattended. Each display
-// manager has its own mechanism.
-func autologinSnippet(displayManager, session string, p Profile) string {
+// autologinSnippet configures SDDM to log the user straight in, so the machine
+// really does land on a desktop unattended.
+func autologinSnippet(p Profile) string {
 	if !p.Autologin {
 		return ""
 	}
-	user := shellQuote(p.Username)
-
-	switch displayManager {
-	case "gdm":
-		// GDM has no drop-in directory, so its config is edited in place: the
-		// autologin keys are inserted under [daemon] and the rest of the file
-		// is left alone.
-		return fmt.Sprintf(`mkdir -p /etc/gdm
-touch /etc/gdm/custom.conf
-grep -q '^\[daemon\]' /etc/gdm/custom.conf || printf '[daemon]\n' >> /etc/gdm/custom.conf
-sed -i '/^AutomaticLogin/d' /etc/gdm/custom.conf
-sed -i '0,/^\[daemon\]/s//[daemon]\nAutomaticLoginEnable=True\nAutomaticLogin=%s/' /etc/gdm/custom.conf
-`, p.Username)
-
-	case "sddm":
-		// DisplayServer=wayland is what makes SDDM run the Wayland session
-		// script; without it SDDM tries to start X and the autologin silently
-		// falls back to a greeter.
-		return fmt.Sprintf(`mkdir -p /etc/sddm.conf.d
+	// DisplayServer=wayland is what makes SDDM run the Wayland session script;
+	// without it SDDM tries to start X and the autologin silently falls back to
+	// a greeter.
+	return fmt.Sprintf(`mkdir -p /etc/sddm.conf.d
 cat > /etc/sddm.conf.d/autologin.conf <<'SDDM'
 [Autologin]
 User=%s
@@ -333,28 +309,7 @@ Session=%s
 [General]
 DisplayServer=wayland
 SDDM
-`, p.Username, session)
-
-	default: // lightdm
-		// LightDM requires the account to be in an "autologin" group, which
-		// does not exist until it is created.
-		//
-		// The settings go in a drop-in rather than lightdm.conf itself. Arch's
-		// lightdm.conf carries session-wrapper=/etc/lightdm/Xsession, and
-		// overwriting it leaves LightDM using its compiled-in default wrapper,
-		// which does not exist on Arch — the session then dies instantly and
-		// LightDM silently falls back to showing the greeter.
-		return fmt.Sprintf(`groupadd -r autologin 2>/dev/null || true
-gpasswd -a %s autologin
-mkdir -p /etc/lightdm/lightdm.conf.d
-cat > /etc/lightdm/lightdm.conf.d/50-march-autologin.conf <<'LIGHTDM'
-[Seat:*]
-autologin-user=%s
-autologin-session=%s
-autologin-user-timeout=0
-LIGHTDM
-`, user, p.Username, session)
-	}
+`, p.Username, sessionName)
 }
 
 // standardServicesSnippet turns on the parts of the standard toolset that do
@@ -399,15 +354,6 @@ func standardServicesSnippet() string {
 	return b.String()
 }
 
-// desktopConfigSnippet writes any desktop-specific configuration into
-// /etc/skel, ahead of the account being created.
-func desktopConfigSnippet(p Profile) string {
-	if p.Desktop == DesktopHyprland {
-		return hyprlandConfigSnippet(p)
-	}
-	return ""
-}
-
 // scalingSnippet configures the desktop's UI scale.
 //
 // A guest framebuffer is measured in the host's physical pixels, so on a
@@ -423,108 +369,11 @@ func scalingSnippet(p Profile) string {
 	// Wayland scales in the compositor. Hyprland's monitor line already carries
 	// the factor, and GDK_SCALE on top of it would double-scale every GTK
 	// window, so only the XWayland-facing variables are set here.
-	if p.Desktop == DesktopHyprland {
-		return fmt.Sprintf(`cat >> /etc/environment <<'ENVSCALE'
+	return fmt.Sprintf(`cat >> /etc/environment <<'ENVSCALE'
 QT_SCALE_FACTOR=%d
 XCURSOR_SIZE=%d
 ENVSCALE
 `, scale, 24*scale)
-	}
-	dpi := 96 * scale
-	cursor := 24 * scale
-
-	var b strings.Builder
-	// Environment variables reach every toolkit and are read by PAM for login
-	// sessions, so they cover the display manager's session too.
-	fmt.Fprintf(&b, `cat >> /etc/environment <<'ENVSCALE'
-GDK_SCALE=%d
-QT_SCALE_FACTOR=%d
-XCURSOR_SIZE=%d
-ENVSCALE
-`, scale, scale, cursor)
-
-	// XFCE's settings daemon publishes its own XSETTINGS, which override the
-	// environment for anything started inside the session.
-	fmt.Fprintf(&b, `mkdir -p /etc/xdg/xfce4/xfconf/xfce-perchannel-xml
-cat > /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml <<'XSETTINGS'
-<?xml version="1.0" encoding="UTF-8"?>
-<channel name="xsettings" version="1.0">
-  <property name="Gdk" type="empty">
-    <property name="WindowScalingFactor" type="int" value="%d"/>
-  </property>
-  <property name="Gtk" type="empty">
-    <property name="CursorThemeSize" type="int" value="%d"/>
-  </property>
-</channel>
-XSETTINGS
-`, scale, cursor)
-
-	// The greeter runs before any session, so it needs telling separately.
-	fmt.Fprintf(&b, `if [ -f /etc/lightdm/lightdm-gtk-greeter.conf ]; then
-  sed -i '/^xft-dpi=/d' /etc/lightdm/lightdm-gtk-greeter.conf
-  printf 'xft-dpi=%d
-' >> /etc/lightdm/lightdm-gtk-greeter.conf
-fi
-`, dpi)
-
-	// X clients that predate XSETTINGS read their font DPI from the server.
-	fmt.Fprintf(&b, `mkdir -p /etc/X11/xinit/xinitrc.d
-cat > /etc/X11/xinit/xinitrc.d/95-march-scaling.sh <<'XRES'
-#!/bin/sh
-xrandr --dpi %d 2>/dev/null || true
-XRES
-chmod 0755 /etc/X11/xinit/xinitrc.d/95-march-scaling.sh
-`, dpi)
-
-	return b.String()
-}
-
-// autoResizeSnippet installs a helper that keeps the guest's resolution in step
-// with the host window.
-//
-// When the QEMU window is resized, virtio-gpu reports a new preferred mode to
-// the guest. The kernel picks it up, but X does not switch to it on its own —
-// GNOME and KDE handle that in their compositors, while a plain X session like
-// XFCE needs something to notice and apply it. This is the guest half of
-// window resizing; without it the display stays at its boot resolution and the
-// window merely scales.
-func autoResizeSnippet(p Profile) string {
-	// Only useful when the host window dictates the guest's size. Otherwise
-	// the guest owns its resolution and the helper would keep overriding it.
-	if !p.FollowHostResize {
-		return ""
-	}
-	// GNOME and KDE already track display changes; a second agent fighting
-	// them would only cause flicker.
-	if p.Desktop != DesktopXFCE {
-		return ""
-	}
-	return `cat > /usr/local/bin/march-autoresize <<'RESIZE'
-#!/bin/sh
-# Follow the host window: apply the preferred mode whenever it is not active.
-# xrandr marks the preferred mode with "+" and the active one with "*".
-while :; do
-  out=$(xrandr --query 2>/dev/null | awk '/ connected/{print $1; exit}')
-  if [ -n "$out" ] && xrandr --query 2>/dev/null |
-       grep -qE '^[[:space:]]+[0-9]+x[0-9]+.*\+' &&
-     ! xrandr --query 2>/dev/null |
-       grep -qE '^[[:space:]]+[0-9]+x[0-9]+.*\*\+'; then
-    xrandr --output "$out" --auto 2>/dev/null
-  fi
-  sleep 2
-done
-RESIZE
-chmod 0755 /usr/local/bin/march-autoresize
-mkdir -p /etc/xdg/autostart
-cat > /etc/xdg/autostart/march-autoresize.desktop <<'DESKTOP'
-[Desktop Entry]
-Type=Application
-Name=march display auto-resize
-Exec=/usr/local/bin/march-autoresize
-NoDisplay=true
-OnlyShowIn=XFCE;
-DESKTOP
-`
 }
 
 // shellQuote renders a value as a single-quoted shell word, safe to paste into

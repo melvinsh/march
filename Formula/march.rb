@@ -38,7 +38,7 @@ class March < Formula
       march finds it automatically; nothing needs to be added to PATH.
 
       To let a VM receive every keystroke — including Cmd+Space, which the
-      desktop binds to its launcher — grant Accessibility permission to the
+      desktop binds to its menu — grant Accessibility permission to the
       terminal you run march from:
         System Settings -> Privacy & Security -> Accessibility
     EOS

@@ -14,6 +14,11 @@ hl.env("ELECTRON_OZONE_PLATFORM_HINT", "wayland")
 hl.env("OZONE_PLATFORM", "wayland")
 hl.env("XDG_SESSION_TYPE", "wayland")
 
+-- What xdg-open and anything else that opens a link falls back to. The desktop
+-- entry in mimeapps.list is the real default; this covers the tools that never
+-- ask xdg-mime.
+hl.env("BROWSER", "google-chrome-stable")
+
 -- Portals key off these, which is what makes screen sharing and file pickers work.
 hl.env("XDG_CURRENT_DESKTOP", "Hyprland")
 hl.env("XDG_SESSION_DESKTOP", "Hyprland")

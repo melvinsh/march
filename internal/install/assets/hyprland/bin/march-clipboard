@@ -1,0 +1,25 @@
+#!/bin/bash
+# Clipboard history, standing in for Omarchy's clipboard panel.
+#
+# cliphist stores what wl-paste watches (started from hyprland.lua) and hands
+# back an id-prefixed line; decoding that id is what recovers an entry byte for
+# byte, including images.
+set -uo pipefail
+
+case "${1:-pick}" in
+  pick)
+    entry=$(cliphist list | fuzzel --dmenu --prompt "clip> " --lines 15) || exit 0
+    [[ -z $entry ]] && exit 0
+    printf '%s' "$entry" | cliphist decode | wl-copy
+    ;;
+
+  clear)
+    cliphist wipe
+    notify-send -a march "Clipboard history cleared" 2>/dev/null || true
+    ;;
+
+  *)
+    echo "usage: march-clipboard pick|clear" >&2
+    exit 2
+    ;;
+esac

@@ -4,6 +4,10 @@
 -- dispatchers and need nothing from Omarchy's tooling. The utility half is
 -- repointed at programs packaged for Arch Linux ARM, since none of Omarchy's own
 -- binaries are built for aarch64.
+--
+-- The menu keys follow Omarchy's quattro branch rather than v3.8.4: the menu
+-- itself, and the routes into it, are what that release moved onto SUPER +
+-- SPACE and the SUPER + CTRL row.
 
 local apps = require("apps")
 
@@ -15,10 +19,17 @@ hl.bind("SUPER + N", hl.dsp.exec_cmd(apps.terminal .. " -e nvim"), { description
 hl.bind("SUPER + T", hl.dsp.exec_cmd(apps.terminal .. " -e btop"), { description = "Activity monitor" })
 
 -- ─── Launcher and menus ──────────────────────────────────────────────────────
--- Omarchy uses walker here; fuzzel fills the same role and is packaged.
-hl.bind("SUPER + space", hl.dsp.exec_cmd("fuzzel"), { description = "Launch apps" })
+-- Omarchy moved SUPER + SPACE from the launcher to its menu in quattro, leaving
+-- the launcher one level deeper. march follows, with march-menu standing in for
+-- omarchy-menu and fuzzel for walker.
+hl.bind("SUPER + space", hl.dsp.exec_cmd("march-menu"), { description = "Menu" })
+hl.bind("SUPER + ALT + space", hl.dsp.exec_cmd("fuzzel"), { description = "Launch apps" })
+hl.bind("SUPER + Escape", hl.dsp.exec_cmd("march-menu system"), { description = "System menu" })
+hl.bind("SUPER + CTRL + C", hl.dsp.exec_cmd("march-menu capture"), { description = "Capture menu" })
+hl.bind("SUPER + CTRL + O", hl.dsp.exec_cmd("march-menu toggle"), { description = "Toggle menu" })
 hl.bind("SUPER + K", hl.dsp.exec_cmd("march-keybindings"), { description = "Show key bindings" })
-hl.bind("SUPER + Escape", hl.dsp.exec_cmd("march-powermenu"), { description = "Power menu" })
+hl.bind("SUPER + CTRL + V", hl.dsp.exec_cmd("march-clipboard pick"), { description = "Clipboard history" })
+hl.bind("SUPER + CTRL + E", hl.dsp.exec_cmd("rofimoji --selector fuzzel --action type"), { description = "Emoji picker" })
 
 -- ─── Windows ─────────────────────────────────────────────────────────────────
 hl.bind("SUPER + W", hl.dsp.window.close(), { description = "Close window" })
@@ -81,25 +92,34 @@ hl.bind("SUPER + mouse_down", hl.dsp.focus({ workspace = "e+1" }), { description
 hl.bind("SUPER + mouse_up", hl.dsp.focus({ workspace = "e-1" }), { description = "Scroll active workspace backward" })
 
 -- ─── Utilities ───────────────────────────────────────────────────────────────
-hl.bind("SUPER + SHIFT + space", hl.dsp.exec_cmd("pkill waybar || waybar"), { description = "Toggle top bar" })
+hl.bind("SUPER + SHIFT + space", hl.dsp.exec_cmd("march-toggle bar"), { description = "Toggle top bar" })
+hl.bind("SUPER + SHIFT + BackSpace", hl.dsp.exec_cmd("march-toggle gaps"), { description = "Toggle window gaps" })
 hl.bind("SUPER + CTRL + L", hl.dsp.exec_cmd("hyprlock"), { description = "Lock system" })
-hl.bind("SUPER + Print", hl.dsp.exec_cmd("pkill hyprpicker || hyprpicker -a"), { description = "Color picker" })
 
--- Screenshots. Omarchy wraps these in omarchy-capture-*; grim and slurp are what
--- those wrappers call underneath.
-hl.bind("Print", hl.dsp.exec_cmd([[grim -g "$(slurp)" - | wl-copy]]), { description = "Screenshot region" })
-hl.bind("SHIFT + Print", hl.dsp.exec_cmd("grim - | wl-copy"), { description = "Screenshot screen" })
+-- Screenshots and recording. Omarchy wraps these in omarchy-capture-*; march
+-- wraps the same grim/slurp/tesseract calls in march-capture, so a screenshot
+-- lands on disk and on the clipboard rather than only on the clipboard.
+hl.bind("Print", hl.dsp.exec_cmd("march-capture region"), { description = "Screenshot region" })
+hl.bind("SHIFT + Print", hl.dsp.exec_cmd("march-capture screen"), { description = "Screenshot screen" })
+hl.bind("SUPER + Print", hl.dsp.exec_cmd("march-capture color"), { description = "Color picker" })
+hl.bind("SUPER + CTRL + Print", hl.dsp.exec_cmd("march-capture text"), { description = "Extract text (OCR)" })
+-- One key both starts and stops, as in Omarchy: stopping fails when nothing is
+-- recording, and then starting is what was meant.
+hl.bind("ALT + Print", hl.dsp.exec_cmd("march-capture record-stop || march-capture record"),
+    { description = "Record screen" })
 
 -- Notifications
 hl.bind("SUPER + comma", hl.dsp.exec_cmd("makoctl dismiss"), { description = "Dismiss last notification" })
 hl.bind("SUPER + SHIFT + comma", hl.dsp.exec_cmd("makoctl dismiss --all"), { description = "Dismiss all notifications" })
 hl.bind("SUPER + ALT + comma", hl.dsp.exec_cmd("makoctl invoke"), { description = "Invoke last notification" })
 hl.bind("SUPER + SHIFT + ALT + comma", hl.dsp.exec_cmd("makoctl restore"), { description = "Restore last notification" })
+hl.bind("SUPER + CTRL + comma", hl.dsp.exec_cmd("march-toggle dnd"), { description = "Silence notifications" })
 
--- Control panels, as terminal apps rather than Omarchy's menus
-hl.bind("SUPER + CTRL + A", hl.dsp.exec_cmd(apps.terminal .. " -e wiremix"), { description = "Audio controls" })
-hl.bind("SUPER + CTRL + W", hl.dsp.exec_cmd(apps.terminal .. " -e nmtui"), { description = "Wifi controls" })
-hl.bind("SUPER + CTRL + T", hl.dsp.exec_cmd(apps.terminal .. " -e btop"), { description = "Activity" })
+-- Control panels. Omarchy opens its own; these are the TUIs that do the same
+-- job, in the floating window march-term gives them.
+hl.bind("SUPER + CTRL + A", hl.dsp.exec_cmd("march-term wiremix"), { description = "Audio controls" })
+hl.bind("SUPER + CTRL + W", hl.dsp.exec_cmd("march-term nmtui"), { description = "Wifi controls" })
+hl.bind("SUPER + CTRL + T", hl.dsp.exec_cmd("march-term btop"), { description = "Activity" })
 
 -- Zoom. Omarchy reads the current factor back with `hyprctl getoption` and
 -- writes it with `hyprctl keyword`; the latter no longer exists now that the

@@ -1,0 +1,52 @@
+#!/bin/bash
+# Package management from the menu — Omarchy's Install, Remove and Update
+# branches, without its curated app lists (those install AUR packages that have
+# no aarch64 build).
+#
+# Everything that needs root runs in a floating terminal so sudo has somewhere
+# to ask for the password, and stays open afterwards so the output can be read.
+set -uo pipefail
+
+pick() {
+  fuzzel --dmenu --prompt "$1> " --lines 15
+}
+
+case "${1-}" in
+  install)
+    pkg=$(pacman -Slq | pick install) || exit 0
+    [[ -z $pkg ]] && exit 0
+    exec march-term --hold sudo pacman -S --needed "$pkg"
+    ;;
+
+  remove)
+    # -Qeq lists what was asked for rather than what was dragged in, so the list
+    # is the one a user recognises.
+    pkg=$(pacman -Qeq | pick remove) || exit 0
+    [[ -z $pkg ]] && exit 0
+    exec march-term --hold sudo pacman -Rns "$pkg"
+    ;;
+
+  orphans)
+    mapfile -t orphans < <(pacman -Qtdq)
+    if (( ${#orphans[@]} == 0 )); then
+      notify-send -a march "No orphaned packages" 2>/dev/null || true
+      exit 0
+    fi
+    exec march-term --hold sudo pacman -Rns "${orphans[@]}"
+    ;;
+
+  update)
+    exec march-term --hold sudo pacman -Syu
+    ;;
+
+  clean)
+    # paccache keeps the last three versions of each package; the cache is the
+    # largest thing a long-lived guest accumulates.
+    exec march-term --hold sudo paccache -r
+    ;;
+
+  *)
+    echo "usage: march-pkg install|remove|orphans|update|clean" >&2
+    exit 2
+    ;;
+esac

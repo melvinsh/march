@@ -1,0 +1,63 @@
+#!/bin/bash
+# The toggles from Omarchy's Toggle menu that mean something in a VM.
+#
+# Omarchy's nightlight, stay-awake, screensaver and battery-percentage toggles
+# are absent: there is no gamma ramp behind virtio-gpu, march runs no idle
+# daemon, and there is no battery.
+#
+# Compositor settings are changed with `hyprctl eval`, which takes Lua now that
+# hyprlang is gone. Hyprland has no "read this option back" that survives a
+# hl.config() write, so the off-state is remembered in a file instead, and the
+# on-state restores the values looknfeel.lua ships.
+set -uo pipefail
+
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/march"
+
+# Waybar re-runs a module's exec when signalled, so a toggle shows up in the bar
+# at once instead of at the end of its interval. The numbers match the "signal"
+# fields in waybar/config.jsonc.
+refresh_bar() {
+  pkill -RTMIN+"$1" waybar 2>/dev/null || true
+}
+
+mark() {
+  mkdir -p "$STATE_DIR"
+  touch "$STATE_DIR/$1"
+}
+
+case "${1-}" in
+  dnd)
+    makoctl mode -t do-not-disturb >/dev/null 2>&1
+    refresh_bar 8
+    ;;
+
+  bar)
+    # Restarting has to outlive this script, or waybar dies with it.
+    pkill waybar || setsid -f waybar >/dev/null 2>&1
+    ;;
+
+  gaps)
+    if [[ -f $STATE_DIR/gaps-off ]]; then
+      rm -f "$STATE_DIR/gaps-off"
+      hyprctl eval 'hl.config({ general = { gaps_in = 5, gaps_out = 10 } })' >/dev/null
+    else
+      mark gaps-off
+      hyprctl eval 'hl.config({ general = { gaps_in = 0, gaps_out = 0 } })' >/dev/null
+    fi
+    ;;
+
+  layout)
+    if [[ -f $STATE_DIR/layout-master ]]; then
+      rm -f "$STATE_DIR/layout-master"
+      hyprctl eval 'hl.config({ general = { layout = "dwindle" } })' >/dev/null
+    else
+      mark layout-master
+      hyprctl eval 'hl.config({ general = { layout = "master" } })' >/dev/null
+    fi
+    ;;
+
+  *)
+    echo "usage: march-toggle dnd|bar|gaps|layout" >&2
+    exit 2
+    ;;
+esac

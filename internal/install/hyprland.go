@@ -21,19 +21,29 @@ var hyprlandAssets embed.FS
 // why its menu, launcher and helper binaries are substituted rather than
 // installed.
 var hyprlandPackages = []string{
-	// Compositor and session
+	// Compositor and session. No hypridle: a VM window sits inside a host that
+	// locks itself, and an idle daemon with nothing to do is still a daemon.
 	"hyprland", "xdg-desktop-portal-hyprland", "qt6-wayland",
-	"hyprlock", "hypridle", "hyprpicker",
+	"hyprlock", "hyprpicker",
 	"sddm", "polkit-gnome",
 
 	// Bar, launcher, notifications, on-screen display
 	"waybar", "fuzzel", "mako", "swayosd", "swaybg",
 
 	// The programs the keybindings actually invoke
-	"alacritty", "nautilus", "chromium",
+	// No chromium: the browser is Google Chrome, unpacked from Google's own
+	// arm64 build because no Arch package carries one. See chrome.go.
+	"alacritty", "nautilus",
 	"grim", "slurp", "wl-clipboard",
 	// No brightnessctl: there is no backlight behind virtio-gpu to set.
 	"wiremix", "btop", "jq", "playerctl",
+
+	// What the menu is made of. Omarchy's equivalents are Quickshell panels and
+	// its own binaries; these are what Arch Linux ARM packages for the same
+	// jobs. wf-recorder rather than gpu-screen-recorder: it encodes with
+	// libx264 on the CPU, and virtio-gpu exposes no hardware encoder.
+	"cliphist", "wl-clip-persist", "rofimoji", "wtype",
+	"wf-recorder", "satty", "libnotify",
 
 	// Fonts and icons the bar and launcher expect
 	"ttf-jetbrains-mono-nerd", "papirus-icon-theme",
@@ -55,10 +65,18 @@ var hyprlandFileMap = map[string]string{
 	"waybar/style.css":    guestConfigRoot + "/.config/waybar/style.css",
 	"fuzzel.ini":          guestConfigRoot + "/.config/fuzzel/fuzzel.ini",
 	"mako.conf":           guestConfigRoot + "/.config/mako/config",
+	"hyprlock.conf":       guestConfigRoot + "/.config/hypr/hyprlock.conf",
+	"mpv.conf":            guestConfigRoot + "/.config/mpv/mpv.conf",
 
 	// Helpers replacing Omarchy's menu binaries; on PATH for every user.
+	"bin/march-menu":        "/usr/local/bin/march-menu",
 	"bin/march-keybindings": "/usr/local/bin/march-keybindings",
-	"bin/march-powermenu":   "/usr/local/bin/march-powermenu",
+	"bin/march-term":        "/usr/local/bin/march-term",
+	"bin/march-bar":         "/usr/local/bin/march-bar",
+	"bin/march-toggle":      "/usr/local/bin/march-toggle",
+	"bin/march-capture":     "/usr/local/bin/march-capture",
+	"bin/march-clipboard":   "/usr/local/bin/march-clipboard",
+	"bin/march-pkg":         "/usr/local/bin/march-pkg",
 }
 
 // HyprlandAsset returns one embedded configuration file, so tests can assert on

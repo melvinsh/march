@@ -1,6 +1,7 @@
 package install
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -42,7 +43,6 @@ func TestProfileValidate(t *testing.T) {
 		{"user starts with digit", func(p *Profile) { p.Username = "1melvin" }, "username"},
 		{"user with space", func(p *Profile) { p.Username = "mel vin" }, "username"},
 		{"root is reserved", func(p *Profile) { p.Username = "root" }, "reserved"},
-		{"unknown desktop", func(p *Profile) { p.Desktop = "unity" }, "desktop"},
 		{"no disk", func(p *Profile) { p.Disk = "" }, "disk"},
 		{"hostname with space", func(p *Profile) { p.Hostname = "my box" }, "whitespace"},
 	}
@@ -80,19 +80,12 @@ func TestScriptIsValidBash(t *testing.T) {
 	if err != nil {
 		t.Skip("bash is not available")
 	}
-	for _, d := range Desktops {
-		t.Run(string(d), func(t *testing.T) {
-			p := testProfile()
-			p.Desktop = d
-			script := mustScript(t, p)
-
-			cmd := exec.Command(bash, "-n")
-			cmd.Stdin = strings.NewReader(script)
-			if out, err := cmd.CombinedOutput(); err != nil {
-				t.Fatalf("bash rejected the generated script: %v\n%s\n--- script ---\n%s",
-					err, out, script)
-			}
-		})
+	script := mustScript(t, testProfile())
+	cmd := exec.Command(bash, "-n")
+	cmd.Stdin = strings.NewReader(script)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("bash rejected the generated script: %v\n%s\n--- script ---\n%s",
+			err, out, script)
 	}
 }
 
@@ -163,6 +156,10 @@ func dryRun(t *testing.T, p Profile, failAt string) (string, error) {
 		// arch-chroot receives the configuration heredoc on stdin.
 		"arch-chroot": "cat >/dev/null; exit 0",
 		"sync":        "exit 0",
+		// Chrome comes from Google rather than from a mirror. Without these two
+		// a unit test would download 126 MB and unpack it onto the host.
+		"curl":   "exit 0",
+		"bsdtar": "exit 0",
 	}
 	for name, body := range stubs {
 		body := body
@@ -184,6 +181,16 @@ func dryRun(t *testing.T, p Profile, failAt string) (string, error) {
 	out := filepath.Join(dir, "console.log")
 	root := filepath.Join(dir, "mnt")
 	if err := os.MkdirAll(filepath.Join(root, "etc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The script checks that Chrome really unpacked before carrying on, which
+	// is exactly the guard that should stay; with bsdtar stubbed out, the dry
+	// run has to put the file there itself.
+	if err := os.MkdirAll(filepath.Join(root, "opt", "google", "chrome"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "opt", "google", "chrome", "chrome"),
+		[]byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	script = strings.ReplaceAll(script, "/dev/ttyAMA0", out)
@@ -422,94 +429,26 @@ func TestShellQuote(t *testing.T) {
 	}
 }
 
-func TestDesktopPackages(t *testing.T) {
-	tests := []struct {
-		desktop Desktop
-		dm      string
-		session string
-		pkg     string
-	}{
-		{DesktopXFCE, "lightdm", "xfce", "xfce4"},
-		{DesktopGNOME, "gdm", "gnome", "gnome"},
-		{DesktopPlasma, "sddm", "plasma", "plasma-meta"},
-	}
-	for _, tc := range tests {
-		t.Run(string(tc.desktop), func(t *testing.T) {
-			p := testProfile()
-			p.Desktop = tc.desktop
-			s := mustScript(t, p)
-
-			if !strings.Contains(s, tc.pkg) {
-				t.Errorf("the script does not install %q", tc.pkg)
-			}
-			if !strings.Contains(s, "systemctl enable "+tc.dm) {
-				t.Errorf("the display manager %q is not enabled", tc.dm)
-			}
-			if !strings.Contains(s, "systemctl set-default graphical.target") {
-				t.Error("the system does not default to a graphical target")
-			}
-			// Xorg and Mesa are what make the desktop render at all.
-			for _, want := range []string{"xorg-server", "mesa"} {
-				if !strings.Contains(s, want) {
-					t.Errorf("the graphics stack is missing %q", want)
-				}
-			}
-		})
-	}
-}
-
-// Autologin is what makes the machine land on a desktop with no interaction,
-// and each display manager configures it differently.
+// Autologin is what makes the machine land on a desktop with no interaction.
 func TestScriptAutologin(t *testing.T) {
-	tests := []struct {
-		desktop Desktop
-		want    []string
-	}{
-		{DesktopXFCE, []string{"/etc/lightdm/lightdm.conf.d/", "autologin-user=melvin", "groupadd -r autologin"}},
-		{DesktopGNOME, []string{"/etc/gdm/custom.conf", "AutomaticLogin=melvin"}},
-		{DesktopPlasma, []string{"/etc/sddm.conf.d/autologin.conf", "User=melvin"}},
-	}
-	for _, tc := range tests {
-		t.Run(string(tc.desktop), func(t *testing.T) {
-			p := testProfile()
-			p.Desktop = tc.desktop
-			s := mustScript(t, p)
-			for _, want := range tc.want {
-				if !strings.Contains(s, want) {
-					t.Errorf("autologin config is missing %q", want)
-				}
-			}
-		})
-	}
-
-	// Arch's lightdm.conf carries session-wrapper=/etc/lightdm/Xsession.
-	// Replacing the file loses it, LightDM falls back to a wrapper that does
-	// not exist, the session dies instantly, and the greeter appears instead
-	// of the desktop — a silent failure that looks like a working install.
-	t.Run("lightdm config is a drop-in, not a replacement", func(t *testing.T) {
-		p := testProfile()
-		p.Desktop = DesktopXFCE
-		s := mustScript(t, p)
-
-		for _, line := range strings.Split(s, "\n") {
-			trimmed := strings.TrimSpace(line)
-			if strings.HasPrefix(trimmed, ">") || strings.Contains(trimmed, "cat >") {
-				if strings.Contains(trimmed, "/etc/lightdm/lightdm.conf") &&
-					!strings.Contains(trimmed, "lightdm.conf.d/") {
-					t.Errorf("the script overwrites Arch's lightdm.conf: %s", trimmed)
-				}
-			}
+	s := mustScript(t, testProfile())
+	for _, want := range []string{
+		"/etc/sddm.conf.d/autologin.conf",
+		"User=melvin",
+		"Session=hyprland",
+		// Without this SDDM starts X, and the autologin silently becomes a
+		// greeter nobody asked for.
+		"DisplayServer=wayland",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("autologin config is missing %q", want)
 		}
-		if !strings.Contains(s, "/etc/lightdm/lightdm.conf.d/") {
-			t.Error("autologin should be configured through a drop-in")
-		}
-	})
+	}
 
 	t.Run("disabled", func(t *testing.T) {
 		p := testProfile()
 		p.Autologin = false
-		s := mustScript(t, p)
-		if strings.Contains(s, "autologin-user") {
+		if s := mustScript(t, p); strings.Contains(s, "[Autologin]") {
 			t.Error("autologin was configured despite being disabled")
 		}
 	})
@@ -550,14 +489,6 @@ func TestPhaseLabels(t *testing.T) {
 	}
 }
 
-func TestDesktopDescriptions(t *testing.T) {
-	for _, d := range Desktops {
-		if d.Description() == "" {
-			t.Errorf("desktop %q has no description", d)
-		}
-	}
-}
-
 // extractHeredoc returns the body of a quoted heredoc, which is what actually
 // runs inside the chroot.
 func extractHeredoc(t *testing.T, script, tag string) string {
@@ -582,81 +513,15 @@ func TestChrootScriptsAreValidBash(t *testing.T) {
 	if err != nil {
 		t.Skip("bash is not available")
 	}
-	for _, d := range Desktops {
-		t.Run(string(d), func(t *testing.T) {
-			p := testProfile()
-			p.Desktop = d
-			script := mustScript(t, p)
-
-			for _, tag := range []string{"MARCH_CHROOT", "MARCH_BOOT"} {
-				body := extractHeredoc(t, script, tag)
-				cmd := exec.Command(bash, "-n")
-				cmd.Stdin = strings.NewReader(body)
-				if out, err := cmd.CombinedOutput(); err != nil {
-					t.Errorf("bash rejected the %s body: %v\n%s\n--- body ---\n%s",
-						tag, err, out, body)
-				}
-			}
-		})
-	}
-}
-
-// Resizing the QEMU window only reaches the guest if something applies the new
-// mode. GNOME and KDE do it themselves; a plain X session does not.
-func TestScriptInstallsAutoResizeForXFCEOnly(t *testing.T) {
-	p := testProfile()
-	p.Desktop = DesktopXFCE // the helper is an X11/xrandr mechanism
-	p.FollowHostResize = true
-	xfce := mustScript(t, p)
-	for _, want := range []string{
-		"/usr/local/bin/march-autoresize",
-		"/etc/xdg/autostart/march-autoresize.desktop",
-		"xrandr --output",
-	} {
-		if !strings.Contains(xfce, want) {
-			t.Errorf("the XFCE install is missing %q", want)
+	script := mustScript(t, testProfile())
+	for _, tag := range []string{"MARCH_CHROOT", "MARCH_BOOT"} {
+		body := extractHeredoc(t, script, tag)
+		cmd := exec.Command(bash, "-n")
+		cmd.Stdin = strings.NewReader(body)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Errorf("bash rejected the %s body: %v\n%s\n--- body ---\n%s",
+				tag, err, out, body)
 		}
-	}
-	// xorg-xrandr is what the helper depends on.
-	if !strings.Contains(xfce, "xorg-xrandr") {
-		t.Error("the resize helper needs xorg-xrandr installed")
-	}
-
-	for _, d := range []Desktop{DesktopGNOME, DesktopPlasma} {
-		p := testProfile()
-		p.Desktop = d
-		p.FollowHostResize = true
-		if s := mustScript(t, p); strings.Contains(s, "march-autoresize") {
-			t.Errorf("%s handles display changes itself; a second agent would fight it", d)
-		}
-	}
-
-	// When the window is sized from the guest instead, the helper would keep
-	// overriding whatever resolution the user picks inside the guest.
-	fixed := testProfile()
-	fixed.Desktop = DesktopXFCE
-	fixed.FollowHostResize = false
-	if s := mustScript(t, fixed); strings.Contains(s, "march-autoresize") {
-		t.Error("the resize helper was installed for a guest that owns its own resolution")
-	}
-}
-
-// The helper is a shell script embedded in a heredoc, so it too escapes the
-// outer syntax check.
-func TestAutoResizeHelperIsValidShell(t *testing.T) {
-	sh, err := exec.LookPath("sh")
-	if err != nil {
-		t.Skip("sh is not available")
-	}
-	p := testProfile()
-	p.Desktop = DesktopXFCE
-	p.FollowHostResize = true
-	body := extractHeredoc(t, mustScript(t, p), "RESIZE")
-
-	cmd := exec.Command(sh, "-n")
-	cmd.Stdin = strings.NewReader(body)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("sh rejected the resize helper: %v\n%s\n--- helper ---\n%s", err, out, body)
 	}
 }
 
@@ -689,22 +554,16 @@ func TestScriptRefreshesKeyringBeforeInstalling(t *testing.T) {
 }
 
 // A guest framebuffer matches the host's physical pixels, so on a high-density
-// screen an unscaled desktop is sharp but too small to read.
-// The X11 desktops scale through toolkit settings and font DPI; Wayland scales
-// in the compositor and is covered separately.
+// screen an unscaled desktop is sharp but too small to read. Hyprland scales in
+// the compositor; only what XWayland cannot learn from it is set here.
 func TestScriptSetsDesktopScaling(t *testing.T) {
 	p := testProfile()
-	p.Desktop = DesktopXFCE
 	p.ScalePercent = 200
 	s := mustScript(t, p)
 
 	for _, want := range []string{
-		"GDK_SCALE=2",       // GTK
-		"QT_SCALE_FACTOR=2", // Qt
+		"QT_SCALE_FACTOR=2", // Qt under XWayland
 		"XCURSOR_SIZE=48",   // pointer, which does not scale on its own
-		`WindowScalingFactor" type="int" value="2"`, // XFCE's own XSETTINGS
-		"xft-dpi=192",      // the greeter, which runs before any session
-		"xrandr --dpi 192", // X clients that predate XSETTINGS
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("scaling config is missing %q", want)
@@ -714,14 +573,13 @@ func TestScriptSetsDesktopScaling(t *testing.T) {
 
 func TestScriptScalingCanBeDisabled(t *testing.T) {
 	p := testProfile()
-	p.Desktop = DesktopXFCE
 	p.ScalePercent = 100
 	s := mustScript(t, p)
 
-	for _, unwanted := range []string{"GDK_SCALE", "WindowScalingFactor", "xrandr --dpi"} {
-		if strings.Contains(s, unwanted) {
-			t.Errorf("scaling was configured at 100%%: found %q", unwanted)
-		}
+	// envs.lua sets a cursor size of its own, so the check is for the block
+	// scalingSnippet writes rather than for the names in it.
+	if strings.Contains(s, "ENVSCALE") {
+		t.Error("scaling was configured at 100%")
 	}
 }
 
@@ -778,26 +636,34 @@ func TestScriptMakesInstalledSystemAbleToInstallPackages(t *testing.T) {
 
 // ── Hyprland ────────────────────────────────────────────────────────────────
 
-func hyprlandProfile() Profile {
-	p := testProfile()
-	p.Desktop = DesktopHyprland
-	return p
-}
+// hyprlandProfile is testProfile under its old name, kept because the checks
+// below read as statements about the desktop rather than about a profile.
+func hyprlandProfile() Profile { return testProfile() }
 
-func TestHyprlandIsTheDefaultDesktop(t *testing.T) {
-	if got := DefaultProfile("x").Desktop; got != DesktopHyprland {
-		t.Errorf("default desktop = %q, want Hyprland", got)
-	}
-	if Desktops[0] != DesktopHyprland {
-		t.Errorf("Desktops[0] = %q, want Hyprland to lead", Desktops[0])
-	}
-	// The others must remain installable.
-	for _, d := range []Desktop{DesktopXFCE, DesktopGNOME, DesktopPlasma} {
-		p := testProfile()
-		p.Desktop = d
-		if _, err := Script(p); err != nil {
-			t.Errorf("desktop %q no longer builds: %v", d, err)
+// march installs one desktop, and nothing may reintroduce a second: an X11
+// stack or a second display manager in the script means a path that no test
+// exercises and no user asked for.
+func TestOnlyOneDesktopIsInstalled(t *testing.T) {
+	s := mustScript(t, testProfile())
+
+	// Package names are matched with their separators, so "gnome" cannot match
+	// the gnome-keyring the desktop legitimately installs.
+	for _, gone := range []string{
+		"xorg-server", "xorg-xinit", "xfce4", "lightdm", "gnome", "plasma-meta", "gdm",
+	} {
+		for _, form := range []string{" " + gone + " ", " " + gone + "\n"} {
+			if strings.Contains(s, form) {
+				t.Errorf("the install still carries %q from the days of a desktop picker", gone)
+			}
 		}
+	}
+	for _, gone := range []string{"GDK_SCALE", "march-autoresize", "lightdm.conf", "custom.conf"} {
+		if strings.Contains(s, gone) {
+			t.Errorf("the install still carries %q from the days of a desktop picker", gone)
+		}
+	}
+	if !strings.Contains(s, "systemctl enable sddm") {
+		t.Error("SDDM is not enabled, so nothing starts the session")
 	}
 }
 
@@ -842,25 +708,61 @@ func TestHyprlandConfigIsWrittenBeforeUseradd(t *testing.T) {
 	}
 }
 
+// installedPrograms is every command name a Hyprland guest can be expected to
+// have: the packages the install lists, march's own helpers taken from the file
+// map, and the binaries whose names differ from the package shipping them.
+//
+// It is the yardstick for three different "does this actually run anything"
+// checks — the bindings, the menu and the bar — so a package added for one of
+// them is available to all three.
+func installedPrograms() map[string]bool {
+	provided := map[string]bool{}
+	for _, list := range [][]string{
+		basePackages, waylandCommonPackages, hyprlandPackages, standardPackages,
+	} {
+		for _, p := range list {
+			provided[p] = true
+		}
+	}
+
+	// Read out of the file map rather than listed here, so a helper that is
+	// added and then never installed cannot pass this check.
+	for _, dest := range hyprlandFileMap {
+		if name, ok := strings.CutPrefix(dest, "/usr/local/bin/"); ok {
+			provided[name] = true
+		}
+	}
+
+	for _, extra := range []string{
+		// Named differently from the package that ships them.
+		"hyprctl",                          // hyprland
+		"makoctl",                          // mako
+		"nvim",                             // neovim
+		"nmtui",                            // networkmanager
+		"notify-send",                      // libnotify
+		"pactl",                            // libpulse, via pipewire-pulse
+		"checkupdates",                     // pacman-contrib
+		"paccache",                         // pacman-contrib
+		"swayosd-client", "swayosd-server", // swayosd
+		"wl-copy", "wl-paste", // wl-clipboard
+
+		// Not a package at all: unpacked from Google's own .deb, see chrome.go.
+		chromeBinary,
+
+		// Shipped by the base system rather than by anything march lists.
+		"bash", "cat", "ip", "pgrep", "pkill", "setsid", "sudo", "systemctl",
+		"pacman", "dbus-update-activation-environment",
+	} {
+		provided[extra] = true
+	}
+	return provided
+}
+
 // Vendoring bindings from Omarchy is exactly where dead shortcuts creep in:
 // none of Omarchy's own binaries exist for aarch64, so any leftover reference
 // is a key that silently does nothing.
 func TestHyprlandBindingsOnlyCallInstalledPrograms(t *testing.T) {
-	// Everything the install puts on the guest's PATH.
-	provided := map[string]bool{}
-	for _, p := range append(append([]string{}, basePackages...), hyprlandPackages...) {
-		provided[p] = true
-	}
-	// Binaries whose names differ from their package, plus march's own helpers
-	// and the shell and systemd tools used in the bindings and autostart.
-	for _, extra := range []string{
-		"hyprctl", "makoctl", "swayosd-client", "swayosd-server", "wl-copy",
-		"nmtui", "pkill", "march-keybindings", "march-powermenu", "nvim",
-		"wiremix", "fuzzel", "waybar", "hyprlock", "hyprpicker", "grim", "slurp",
-		"playerctl", "jq", "systemctl", "dbus-update-activation-environment",
-	} {
-		provided[extra] = true
-	}
+	provided := installedPrograms()
 
 	for _, name := range HyprlandAssetNames() {
 		if !strings.HasSuffix(name, ".lua") {
@@ -960,6 +862,201 @@ func luaTableString(body, field string) string {
 	return ""
 }
 
+// ── The menu and the bar ────────────────────────────────────────────────────
+
+// menuRows returns march-menu's table, one row of five fields: id, icon, label,
+// action and condition. Rows are the tab-separated lines of the heredoc; every
+// other line of the script has no tabs in it.
+func menuRows(t *testing.T) [][]string {
+	t.Helper()
+	body, err := HyprlandAsset("bin/march-menu")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows [][]string
+	for _, line := range strings.Split(body, "\n") {
+		fields := strings.Split(line, "\t")
+		if len(fields) != 5 {
+			continue
+		}
+		rows = append(rows, fields)
+	}
+	if len(rows) == 0 {
+		t.Fatal("march-menu has no rows at all")
+	}
+	return rows
+}
+
+// The whole point of the menu is that its entries do something. Omarchy's own
+// binaries have no aarch64 build, so a row copied over unchanged is a line that
+// looks right and runs nothing.
+func TestMenuOnlyRunsInstalledPrograms(t *testing.T) {
+	provided := installedPrograms()
+
+	check := func(id, kind, command string) {
+		if command == "-" {
+			return
+		}
+		fields := strings.Fields(command)
+		if len(fields) == 0 {
+			t.Errorf("%s has an empty %s", id, kind)
+			return
+		}
+		// A condition may be negated; the program is what follows.
+		bin := fields[0]
+		if bin == "!" && len(fields) > 1 {
+			bin = fields[1]
+		}
+		if !provided[bin] {
+			t.Errorf("menu row %s %s runs %q, which nothing installs:\n  %s",
+				id, kind, bin, command)
+		}
+	}
+
+	for _, row := range menuRows(t) {
+		check(row[0], "action", row[3])
+		check(row[0], "condition", row[4])
+	}
+}
+
+// A branch with no rows under it opens an empty list, and a row whose parent is
+// missing can never be reached.
+func TestMenuTreeIsWellFormed(t *testing.T) {
+	rows := menuRows(t)
+
+	ids := map[string]string{} // id -> action
+	for _, row := range rows {
+		if prev, dup := ids[row[0]]; dup {
+			t.Errorf("menu id %q appears twice (%q and %q)", row[0], prev, row[3])
+		}
+		ids[row[0]] = row[3]
+	}
+
+	hasChildren := map[string]bool{}
+	for id := range ids {
+		parent, _, nested := strings.Cut(id, ".")
+		if !nested {
+			continue
+		}
+		if _, ok := ids[parent]; !ok {
+			t.Errorf("menu row %q hangs off %q, which is not a row", id, parent)
+		}
+		hasChildren[parent] = true
+	}
+
+	for id, action := range ids {
+		if action == "-" && !hasChildren[id] {
+			t.Errorf("menu branch %q has no rows under it, so it opens empty", id)
+		}
+	}
+}
+
+// A key bound to a route the table does not have opens nothing at all, which is
+// indistinguishable from a broken keyboard.
+func TestBindingsOpenMenuRoutesThatExist(t *testing.T) {
+	rows := menuRows(t)
+	ids := map[string]bool{}
+	for _, row := range rows {
+		ids[row[0]] = true
+	}
+
+	bindings, err := HyprlandAsset("bindings.lua")
+	if err != nil {
+		t.Fatal(err)
+	}
+	routes := 0
+	for _, cmd := range luaExecCommands(bindings) {
+		fields := strings.Fields(cmd)
+		if len(fields) == 0 || fields[0] != "march-menu" {
+			continue
+		}
+		if len(fields) == 1 {
+			continue // the root
+		}
+		routes++
+		if !ids[fields[1]] {
+			t.Errorf("a key opens the menu at %q, which is not a row in it", fields[1])
+		}
+	}
+	if routes == 0 {
+		t.Error("no key opens a menu branch directly; Omarchy binds several")
+	}
+}
+
+// waybar refuses to start on a config it cannot parse, which takes the whole
+// bar with it. The file is JSONC only in that it carries comments.
+func TestBarConfigIsValidJSON(t *testing.T) {
+	body, err := HyprlandAsset("waybar/config.jsonc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stripped strings.Builder
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "//") {
+			continue
+		}
+		stripped.WriteString(line)
+		stripped.WriteString("\n")
+	}
+
+	var config map[string]any
+	if err := json.Unmarshal([]byte(stripped.String()), &config); err != nil {
+		t.Fatalf("waybar config is not valid JSON: %v", err)
+	}
+
+	// Every module named in a section must be configured, or waybar draws a gap.
+	for _, section := range []string{"modules-left", "modules-center", "modules-right"} {
+		names, ok := config[section].([]any)
+		if !ok {
+			t.Errorf("the bar has no %s", section)
+			continue
+		}
+		for _, name := range names {
+			module, _ := name.(string)
+			if _, ok := config[module]; !ok && !strings.HasPrefix(module, "hyprland/") {
+				t.Errorf("%s lists %q, which the config never defines", section, module)
+			}
+		}
+	}
+}
+
+// The complaint this change answers: the bar's buttons opened a terminal or
+// nothing. Every one of them must run something the guest actually has.
+func TestBarButtonsRunInstalledPrograms(t *testing.T) {
+	body, err := HyprlandAsset("waybar/config.jsonc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	provided := installedPrograms()
+
+	commands := regexp.MustCompile(`"(on-click|on-click-right|exec)"\s*:\s*"([^"]+)"`)
+	found := 0
+	for _, m := range commands.FindAllStringSubmatch(body, -1) {
+		command := m[2]
+		// "activate" is waybar's own workspace action, not a program.
+		if command == "activate" {
+			continue
+		}
+		found++
+		if bin := strings.Fields(command)[0]; !provided[bin] {
+			t.Errorf("the bar runs %q, which nothing installs:\n  %s", bin, command)
+		}
+	}
+	if found == 0 {
+		t.Error("no module in the bar runs anything")
+	}
+}
+
+// An idle daemon with no rules is a process that does nothing; one with rules
+// locks a VM that the host already locks. Neither is wanted, so nothing should
+// start it.
+func TestNoIdleDaemonIsInstalledOrStarted(t *testing.T) {
+	s := mustScript(t, hyprlandProfile())
+	if strings.Contains(s, "hypridle") {
+		t.Error("hypridle is still installed or autostarted")
+	}
+}
+
 // The keybindings are Omarchy's; drifting from them defeats the point.
 func TestHyprlandMirrorsOmarchyShortcuts(t *testing.T) {
 	bindings, err := HyprlandAsset("bindings.lua")
@@ -969,7 +1066,7 @@ func TestHyprlandMirrorsOmarchyShortcuts(t *testing.T) {
 	// A representative sample spanning apps, tiling, workspaces and utilities.
 	for _, want := range []string{
 		`"SUPER + Return"`, // terminal
-		`"SUPER + space"`,  // launcher
+		`"SUPER + space"`,  // the menu, as in quattro
 		`"SUPER + W", hl.dsp.window.close()`,
 		`"SUPER + J", hl.dsp.layout("togglesplit")`,
 		`"SUPER + left", hl.dsp.focus({ direction = "left" })`,
@@ -1065,7 +1162,10 @@ func TestHyprlandHelperScriptsAreValidShell(t *testing.T) {
 	if err != nil {
 		t.Skip("bash is not available")
 	}
-	for _, name := range []string{"bin/march-keybindings", "bin/march-powermenu"} {
+	for _, name := range HyprlandAssetNames() {
+		if !strings.HasPrefix(name, "bin/") {
+			continue
+		}
 		body, err := HyprlandAsset(name)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -1310,7 +1410,6 @@ func TestHyprlandEffectsFollowRendering(t *testing.T) {
 // confusing way than if it were simply absent.
 func TestVulkanPackagesFollowTheHost(t *testing.T) {
 	p := DefaultProfile("arch")
-	p.Desktop = DesktopHyprland
 	p.Username, p.Password = "arch", "marchtest"
 
 	p.VulkanAccelerated = false
@@ -1333,6 +1432,98 @@ func TestVulkanPackagesFollowTheHost(t *testing.T) {
 		if !strings.Contains(on, pkg) {
 			t.Errorf("%s is missing from a Venus-capable guest", pkg)
 		}
+	}
+}
+
+// ── The browser ─────────────────────────────────────────────────────────────
+
+// Chrome is the one thing march installs that does not come from a mirror, so
+// every step of getting it in has to be in the script: fetched, unpacked,
+// checked, and made the default.
+func TestChromeIsInstalledAndDefault(t *testing.T) {
+	s := mustScript(t, testProfile())
+
+	for _, want := range []string{
+		chromeDebURL,
+		"bsdtar -xpf /tmp/chrome/data.tar.*",
+		// Unpacking silently produces nothing when the archive layout changes,
+		// and the next thing a user would notice is a browser that is not there.
+		"/mnt/opt/google/chrome/chrome",
+		// Google's package adds an apt repository through a daily cron job.
+		"--exclude './etc/cron.daily*'",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("the Chrome install is missing %q", want)
+		}
+	}
+
+	// bsdtar and curl are not in the live environment by default, and the whole
+	// fetch depends on both.
+	if !strings.Contains(s, "libarchive curl") {
+		t.Error("the tools phase does not install what the Chrome fetch needs")
+	}
+	for _, tool := range []string{"bsdtar", "curl"} {
+		if !strings.Contains(s, " "+tool+" ") && !strings.Contains(s, tool+";") {
+			t.Errorf("%s is never checked for before it is used", tool)
+		}
+	}
+
+	// Default browser, three ways: the desktop entry for anything asking
+	// xdg-mime, $BROWSER for anything that does not, and apps.lua for the key.
+	if !strings.Contains(s, "x-scheme-handler/https="+chromeDesktopFile) {
+		t.Error("Chrome is installed but is not the default for https links")
+	}
+	envs, err := HyprlandAsset("envs.lua")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(envs, `hl.env("BROWSER", "`+chromeBinary+`")`) {
+		t.Error("$BROWSER does not point at Chrome")
+	}
+	apps, err := HyprlandAsset("apps.lua")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if browser := luaTableString(apps, "browser"); !strings.HasPrefix(browser, chromeBinary+" ") {
+		t.Errorf("apps.browser is %q, want Chrome", browser)
+	}
+	// A key, a click in the launcher and a link from another program must all
+	// start the same browser. Chrome has no flags file, so the flags are
+	// repeated in three places and have to agree.
+	if browser := luaTableString(apps, "browser"); !strings.Contains(browser, chromeFlags) {
+		t.Errorf("apps.browser is %q, want it to carry %q", browser, chromeFlags)
+	}
+	if !strings.Contains(s, "Exec=/usr/bin/google-chrome-stable "+chromeFlags) {
+		t.Error("Chrome's desktop entry is not given march's flags, so anything " +
+			"launching it through xdg-open starts a different browser")
+	}
+	menu, err := HyprlandAsset("bin/march-menu")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range strings.Split(menu, "\n") {
+		if !strings.Contains(row, chromeBinary) {
+			continue
+		}
+		if !strings.Contains(row, chromeFlags) {
+			t.Errorf("a menu row starts Chrome without march's flags:\n  %s", row)
+		}
+	}
+}
+
+// Chrome is not a pacman package, so nothing resolves its shared libraries for
+// it. Missing one is a browser that exits with a linker error.
+func TestChromeDependenciesAreInstalled(t *testing.T) {
+	s := mustScript(t, testProfile())
+	for _, pkg := range chromePackages {
+		if !strings.Contains(s, " "+pkg+" ") && !strings.Contains(s, " "+pkg+"\n") {
+			t.Errorf("Chrome needs %q and nothing installs it", pkg)
+		}
+	}
+	// Chromium was the browser before; two of them is one more than was asked
+	// for, and the second is 190 MB of download nobody opens.
+	if strings.Contains(s, " chromium ") {
+		t.Error("chromium is still installed alongside Chrome")
 	}
 }
 
@@ -1362,17 +1553,14 @@ func TestStandardPackagesAreInstalled(t *testing.T) {
 	}
 }
 
-// They are the distro's tools, not the compositor's: a guest running XFCE
-// should have git and ripgrep just as much as one running Hyprland.
-func TestStandardPackagesReachEveryDesktop(t *testing.T) {
-	for _, d := range Desktops {
-		p := testProfile()
-		p.Desktop = d
-		s := mustScript(t, p)
-		for _, pkg := range []string{"git", "ripgrep", "unzip", "mpv", "docker", "wireplumber"} {
-			if !strings.Contains(s, " "+pkg+" ") && !strings.HasSuffix(s, " "+pkg) {
-				t.Errorf("desktop %q does not install %q", d, pkg)
-			}
+// They are the distro's tools, not the compositor's, and they go in with the
+// desktop rather than the base so a failure here cannot leave a machine
+// without a bootable system.
+func TestStandardPackagesAreInstalledWithTheDesktop(t *testing.T) {
+	s := mustScript(t, testProfile())
+	for _, pkg := range []string{"git", "ripgrep", "unzip", "mpv", "docker", "wireplumber"} {
+		if !strings.Contains(s, " "+pkg+" ") && !strings.HasSuffix(s, " "+pkg) {
+			t.Errorf("the install does not carry %q", pkg)
 		}
 	}
 }
@@ -1443,17 +1631,15 @@ func TestDockerGroupIsGrantedAfterTheAccountExists(t *testing.T) {
 // unit in `systemctl --failed` — and it is paid for in download time on every
 // single install.
 func TestNothingIsInstalledForHardwareThatIsAbsent(t *testing.T) {
-	for _, d := range Desktops {
-		p := testProfile()
-		p.Desktop = d
-		s := mustScript(t, p)
+	{
+		s := mustScript(t, testProfile())
 
-		for _, pkg := range omittedForVirtualHardware {
+		for _, pkg := range append(append([]string{}, omittedForVirtualHardware...), omittedBrokenOnARM...) {
 			// Word boundaries: "bluez" must not match "bluez-utils", and a
 			// package name must not match a substring of another.
 			for _, form := range []string{" " + pkg + " ", " " + pkg + "\n"} {
 				if strings.Contains(s, form) {
-					t.Errorf("desktop %q installs %q, which has no hardware behind it in a VM", d, pkg)
+					t.Errorf("the install carries %q, which has no hardware behind it in a VM", pkg)
 					break
 				}
 			}

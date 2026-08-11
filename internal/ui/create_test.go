@@ -10,7 +10,6 @@ import (
 
 	"github.com/melvinsh/march/internal/config"
 	"github.com/melvinsh/march/internal/host"
-	"github.com/melvinsh/march/internal/install"
 )
 
 func TestCPUChoices(t *testing.T) {
@@ -113,25 +112,6 @@ func TestDisplayChoices(t *testing.T) {
 	}
 }
 
-func TestDesktopChoices(t *testing.T) {
-	opts := desktopChoices()
-	if len(opts) != len(install.Desktops) {
-		t.Fatalf("got %d desktops, want one per supported environment", len(opts))
-	}
-	// Hyprland leads and carries the marker: it is march's default desktop.
-	if opts[0].Value != string(install.DesktopHyprland) {
-		t.Errorf("first option is %q, want Hyprland", opts[0].Value)
-	}
-	if !strings.Contains(opts[0].Key, "recommended") {
-		t.Errorf("XFCE option %q is not marked recommended", opts[0].Key)
-	}
-	for _, o := range opts {
-		if !strings.Contains(o.Key, "—") {
-			t.Errorf("option %q carries no explanation", o.Key)
-		}
-	}
-}
-
 func TestCreateModelSpec(t *testing.T) {
 	caps := testCaps()
 	m := newCreateModel(caps, nil)
@@ -197,7 +177,6 @@ func TestCreateModelInstallProfile(t *testing.T) {
 	m.name = "box"
 	m.username = "melvin"
 	m.password = "hunter2"
-	m.desktop = string(install.DesktopPlasma)
 
 	p := m.InstallProfile()
 	if p.Hostname != "box" {
@@ -205,9 +184,6 @@ func TestCreateModelInstallProfile(t *testing.T) {
 	}
 	if p.Username != "melvin" || p.Password != "hunter2" {
 		t.Errorf("account = %q/%q", p.Username, p.Password)
-	}
-	if p.Desktop != install.DesktopPlasma {
-		t.Errorf("Desktop = %q", p.Desktop)
 	}
 	if !p.Autologin {
 		t.Error("autologin should be on so the VM lands on a desktop unattended")

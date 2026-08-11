@@ -1,0 +1,52 @@
+#!/bin/bash
+# Status for waybar's custom modules, standing in for Omarchy's bar indicators.
+#
+# Every subcommand prints one line of JSON, always — a module whose exec prints
+# nothing makes waybar log an error on every interval, and these run on a timer
+# forever. An empty "text" hides the module, which is how an indicator says
+# "nothing to report" rather than sitting there greyed out.
+set -uo pipefail
+
+# text, tooltip, class
+report() {
+  printf '{"text":"%s","tooltip":"%s","class":"%s"}\n' "$1" "$2" "$3"
+}
+
+silent() {
+  report "" "" ""
+}
+
+case "${1-}" in
+  updates)
+    # checkupdates syncs its own copy of the database, so it needs neither root
+    # nor a pacman lock. It exits non-zero when there is nothing to report and
+    # when the network is gone, and both of those mean the same thing here.
+    count=$(checkupdates 2>/dev/null | wc -l)
+    if (( count > 0 )); then
+      report "󰚰 $count" "$count updates pending" "pending"
+    else
+      silent
+    fi
+    ;;
+
+  dnd)
+    if makoctl mode 2>/dev/null | grep -qx "do-not-disturb"; then
+      report "󰂛" "Notifications are silenced" "active"
+    else
+      silent
+    fi
+    ;;
+
+  recording)
+    if pgrep -x wf-recorder >/dev/null 2>&1; then
+      report "󰑊" "Recording — click to stop" "active"
+    else
+      silent
+    fi
+    ;;
+
+  *)
+    echo "usage: march-bar updates|dnd|recording" >&2
+    exit 2
+    ;;
+esac

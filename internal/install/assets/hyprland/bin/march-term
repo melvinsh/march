@@ -1,0 +1,28 @@
+#!/bin/bash
+# Open a TUI in a floating terminal window, standing in for Omarchy's
+# omarchy-launch-floating-terminal. The class is what apps.lua floats, so every
+# menu action that takes over the screen looks the same.
+#
+#   march-term btop                  close the window when the program exits
+#   march-term --hold pacman -Syu    keep it open so the output can be read
+set -uo pipefail
+
+hold=0
+if [[ ${1-} == "--hold" ]]; then
+  hold=1
+  shift
+fi
+
+if (( $# == 0 )); then
+  echo "usage: march-term [--hold] command [args...]" >&2
+  exit 2
+fi
+
+if (( hold )); then
+  # "$@" is passed through as arguments rather than interpolated into the
+  # script, so a filename with a space cannot turn into two words.
+  exec alacritty --class march-float -e bash -c \
+    'set +e; "$@"; printf "\n[press enter to close] "; read -r' march-term "$@"
+fi
+
+exec alacritty --class march-float -e "$@"

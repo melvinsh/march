@@ -22,7 +22,6 @@ type createModel struct {
 
 	// Bound form values.
 	name     string
-	desktop  string
 	username string
 	password string
 	cpus     string
@@ -102,19 +101,6 @@ func displayChoices(caps *host.Caps) []huh.Option[string] {
 	return opts
 }
 
-// desktopChoices lists the graphical environments march can install.
-func desktopChoices() []huh.Option[string] {
-	var opts []huh.Option[string]
-	for _, d := range install.Desktops {
-		label := strings.ToUpper(string(d))
-		if d == install.Desktops[0] {
-			label += "  (recommended)"
-		}
-		opts = append(opts, huh.NewOption(label+" — "+d.Description(), string(d)))
-	}
-	return opts
-}
-
 func newCreateModel(caps *host.Caps, existing []string) *createModel {
 	def := config.Defaults("", caps)
 
@@ -126,7 +112,6 @@ func newCreateModel(caps *host.Caps, existing []string) *createModel {
 		highmem:  def.Highmem,
 		ioThread: def.IOThread,
 		name:     suggestName(existing),
-		desktop:  string(install.DesktopXFCE),
 		username: "arch",
 	}
 
@@ -160,12 +145,6 @@ func newCreateModel(caps *host.Caps, existing []string) *createModel {
 					}
 					return nil
 				}),
-
-			huh.NewSelect[string]().
-				Key("desktop").
-				Title("Desktop").
-				Options(desktopChoices()...).
-				Value(&m.desktop),
 		),
 
 		huh.NewGroup(
@@ -264,7 +243,6 @@ func (m *createModel) Spec() config.VM {
 	v.GPU = v.Display != config.DisplayNone
 	v.Highmem = m.highmem
 	v.IOThread = m.ioThread
-	v.Desktop = m.desktop
 	v.Username = m.username
 	return v
 }
@@ -272,7 +250,6 @@ func (m *createModel) Spec() config.VM {
 // InstallProfile is the unattended installation the wizard described.
 func (m *createModel) InstallProfile() install.Profile {
 	p := install.DefaultProfile(m.name)
-	p.Desktop = install.Desktop(m.desktop)
 	p.Username = m.username
 	p.Password = m.password
 	p.Autologin = true

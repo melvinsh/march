@@ -1,5 +1,6 @@
 The Hyprland, Waybar and keybinding configuration in this directory is derived
-from Omarchy, at tag v3.8.4.
+from Omarchy, at tag v3.8.4. The menu (bin/march-menu and the helpers around it)
+follows Omarchy's quattro branch: its menu tree, its routes and its bar layout.
 
     https://github.com/basecamp/omarchy
     Copyright (c) David Heinemeier Hansson
@@ -29,3 +30,20 @@ Changes made for march:
     removed, having no meaning in a virtual machine.
 
   * Theme-switching machinery is omitted; march ships a single look.
+
+  * Omarchy's menu and bar are Quickshell plugins, and quickshell has no aarch64
+    package. The menu tree is rebuilt as a table read by fuzzel (bin/march-menu)
+    and the bar's widgets as waybar modules fed by bin/march-bar. Branches
+    needing hardware that QEMU's virt machine does not have — bluetooth,
+    battery, display brightness, weather, dictation — are dropped, as is
+    Suspend: the guest can enter it, but nothing on the host side sends the
+    QMP system_wakeup that would bring it back.
+
+  * Screen recording uses wf-recorder rather than gpu-screen-recorder, which
+    needs a hardware video encoder that virtio-gpu does not expose.
+
+  * hypridle is not installed. A guest window sits inside a host that already
+    locks itself.
+
+  * The browser is Google Chrome rather than Omarchy's Chromium, unpacked from
+    Google's own aarch64 .deb because no Arch package carries one.

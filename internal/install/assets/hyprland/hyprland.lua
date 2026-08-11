@@ -26,8 +26,15 @@ require("monitor")
 hl.on("hyprland.start", function()
     hl.exec_cmd("waybar")
     hl.exec_cmd("mako")
-    hl.exec_cmd("hypridle")
     hl.exec_cmd("swayosd-server")
+
+    -- Clipboard history, which march-clipboard reads back. wl-clip-persist
+    -- keeps what was copied after the program that copied it exits; on Wayland
+    -- the clipboard otherwise dies with its owner.
+    hl.exec_cmd("wl-paste --type text --watch cliphist store")
+    hl.exec_cmd("wl-paste --type image --watch cliphist store")
+    hl.exec_cmd("wl-clip-persist --clipboard regular")
+
     hl.exec_cmd('swaybg -c "#1a1b26"')
     hl.exec_cmd("/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1")
 

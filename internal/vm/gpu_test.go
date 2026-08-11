@@ -146,7 +146,7 @@ func TestHardwareAcceleratedDesktop(t *testing.T) {
 		t.Errorf("the guest has failed units:\n%s", failed)
 	}
 
-	// Venus forwards the guest's Vulkan to the host GPU. Without it Chromium,
+	// Venus forwards the guest's Vulkan to the host GPU. Without it Chrome,
 	// which renders through ANGLE's Vulkan backend, falls back to SwiftShader
 	// on a guest whose desktop is otherwise fully accelerated.
 	venus := caps.SupportsVenus()
@@ -170,7 +170,7 @@ document.body.setAttribute('data-r',g?(g.getParameter(g.VERSION)+' :: '+(d?g.get
 </script></body></html>
 HTML
 echo ok`)
-	webgl := ask(`timeout 90 chromium --headless=new --no-sandbox --disable-gpu-sandbox ` +
+	webgl := ask(`timeout 90 google-chrome-stable --headless=new --no-sandbox --disable-gpu-sandbox ` +
 		`--dump-dom file:///tmp/webgl.html 2>/dev/null | grep --color=never -o 'data-r="[^"]*"'`)
 	software := strings.Contains(strings.ToLower(webgl), "swiftshader") ||
 		strings.Contains(strings.ToLower(webgl), "llvmpipe")

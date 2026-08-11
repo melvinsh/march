@@ -43,7 +43,7 @@ var standardPackages = []string{
 	// gamma_size prop" on this hardware. moonlight-qt is not here either — it
 	// is a game-streaming client that needs hardware video decode.
 	"evince", "xournalpp", "libreoffice-fresh", "gnome-disk-utility",
-	"system-config-printer", "foot", "hyprland-guiutils",
+	"foot", "hyprland-guiutils",
 
 	// Files, mounts and network shares. gvfs-mtp is not here: MTP needs a USB
 	// device passed through, and march passes none.
@@ -98,6 +98,9 @@ var standardPackages = []string{
 //	                                 line, which would hide the console output
 //	                                 the installer reads
 //	uwsm                             would replace the SDDM session march uses
+//	hypridle                         a guest window sits inside a host that
+//	                                 already locks itself, so idling it only
+//	                                 costs the password again
 //
 // The same reasoning removed brightnessctl from hyprlandPackages: there is no
 // backlight to set.
@@ -105,5 +108,17 @@ var omittedForVirtualHardware = []string{
 	"bluez", "bluez-utils", "bluez-tools", "bolt", "ddcutil",
 	"power-profiles-daemon", "wireless-regdb", "avahi", "nss-mdns",
 	"cups-browsed", "gvfs-mtp", "gpu-screen-recorder", "hyprsunset",
-	"moonlight-qt", "plymouth", "uwsm", "brightnessctl",
+	"moonlight-qt", "plymouth", "uwsm", "brightnessctl", "hypridle",
 }
+
+// These are omitted for a different reason: the hardware is beside the point,
+// the aarch64 package itself does not work.
+//
+//	system-config-printer  its package installs the egg-info for cupshelpers
+//	                       without the module, so the program stops at "No
+//	                       module named 'cupshelpers'" every time it is opened.
+//	                       CUPS' own interface on localhost:631 is the working
+//	                       way to add a printer, and cups-pdf needs no adding.
+//
+// Found by running it in a guest rather than by reading the package list.
+var omittedBrokenOnARM = []string{"system-config-printer"}

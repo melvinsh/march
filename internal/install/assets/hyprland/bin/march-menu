@@ -1,0 +1,156 @@
+#!/bin/bash
+# march's menu, after Omarchy's omarchy-menu.
+#
+# Omarchy's is a Quickshell plugin reading a JSONC tree; quickshell has no
+# aarch64 package, so the same tree lives here as a table and fuzzel draws it.
+# Route names are Omarchy's, so `omarchy-menu toggle capture` and
+# `march-menu capture` mean the same thing.
+#
+#   march-menu             open at the root
+#   march-menu capture     open a branch directly, which is what the keys bind
+#   march-menu --list      print the tree instead of opening it
+#
+# Columns are id, icon, label, action, condition, separated by tabs so an action
+# can contain the shell's own punctuation. "-" means "no action" (making the row
+# a submenu) and "no condition". A row with a condition is hidden while that
+# command fails, which is how Omarchy's `when` field keeps "Stop recording" out
+# of the list while nothing is recording.
+#
+# Icons come from the Material Design range of the Nerd Font, as the bar's do.
+#
+# There is no Suspend row. The guest can enter suspend — /sys/power/state offers
+# "mem" — but only a QMP system_wakeup brings the machine back, and neither
+# march's window nor QEMU's has anything that sends one. The entry would strand
+# the VM.
+set -uo pipefail
+
+rows() {
+  cat <<'ROWS'
+apps	󰀻	Apps	fuzzel	-
+learn	󰧑	Learn	-	-
+capture	󱓞	Capture	-	-
+clipboard	󰅌	Clipboard	-	-
+emoji	󰞅	Emoji	rofimoji --selector fuzzel --action type	-
+toggle	󰔎	Toggle	-	-
+setup	󰒓	Setup	-	-
+install	󰉉	Install	-	-
+remove	󰭌	Remove	-	-
+update	󰚰	Update	-	-
+system	󰤆	System	-	-
+
+learn.keybindings	󰌌	Keybindings	march-keybindings	-
+learn.hyprland	󰖟	Hyprland wiki	google-chrome-stable --ozone-platform=wayland --password-store=basic --no-first-run --no-default-browser-check https://wiki.hypr.land/	-
+learn.arch	󰣇	Arch wiki	google-chrome-stable --ozone-platform=wayland --password-store=basic --no-first-run --no-default-browser-check https://wiki.archlinux.org/	-
+learn.bash	󱆃	Bash cheatsheet	google-chrome-stable --ozone-platform=wayland --password-store=basic --no-first-run --no-default-browser-check https://devhints.io/bash	-
+learn.march	󰊤	march	google-chrome-stable --ozone-platform=wayland --password-store=basic --no-first-run --no-default-browser-check https://github.com/melvinsh/march	-
+
+capture.region	󰩭	Screenshot region	march-capture region	-
+capture.screen	󰹑	Screenshot screen	march-capture screen	-
+capture.annotate	󰃣	Annotate last screenshot	march-capture annotate	march-capture latest
+capture.color	󰃉	Colour picker	march-capture color	-
+capture.text	󰴑	Text (OCR)	march-capture text	-
+capture.record	󰑊	Record screen	march-capture record	! march-capture record-status
+capture.record-audio	󰑊	Record screen with audio	march-capture record --audio	! march-capture record-status
+capture.record-stop	󰓛	Stop recording	march-capture record-stop	march-capture record-status
+
+clipboard.pick	󰅌	History	march-clipboard pick	-
+clipboard.clear	󰩹	Clear history	march-clipboard clear	-
+
+toggle.notifications	󰂛	Silence notifications	march-toggle dnd	-
+toggle.bar	󰍜	Top bar	march-toggle bar	-
+toggle.gaps	󰋁	Window gaps	march-toggle gaps	-
+toggle.layout	󱂬	Workspace layout	march-toggle layout	-
+
+setup.hyprland	󰒓	Hyprland	march-term ${EDITOR:-nvim} ~/.config/hypr/hyprland.lua	-
+setup.keybindings	󰌌	Keybindings	march-term ${EDITOR:-nvim} ~/.config/hypr/bindings.lua	-
+setup.looknfeel	󰉼	Look and feel	march-term ${EDITOR:-nvim} ~/.config/hypr/looknfeel.lua	-
+setup.monitor	󰍹	Monitor	march-term ${EDITOR:-nvim} ~/.config/hypr/monitor.lua	-
+setup.apps	󰀻	Default apps	march-term ${EDITOR:-nvim} ~/.config/hypr/apps.lua	-
+setup.bar	󰍜	Top bar	march-term ${EDITOR:-nvim} ~/.config/waybar/config.jsonc	-
+setup.network	󰛳	Network details	march-term --hold bash -c 'ip -brief address; ip route; cat /etc/resolv.conf'	-
+
+install.package	󰏖	Package	march-pkg install	-
+
+remove.package	󰏗	Package	march-pkg remove	-
+remove.orphans	󰩹	Orphaned packages	march-pkg orphans	-
+
+update.system	󰚰	System packages	march-pkg update	-
+update.cache	󰃢	Clean package cache	march-pkg clean	-
+update.about	󰋼	About this system	march-term --hold fastfetch	-
+
+system.lock	󰌾	Lock	hyprlock	-
+system.logout	󰍃	Log out	hyprctl dispatch 'hl.dsp.exit()'	-
+system.reboot	󰜉	Reboot	systemctl reboot	-
+system.shutdown	󰐥	Shut down	systemctl poweroff	-
+ROWS
+}
+
+# The rows one level below a route; the root is the rows with no dot in their id.
+children() {
+  rows | awk -F'\t' -v route="$1" '
+    NF < 5 { next }
+    {
+      if (route == "") {
+        if ($1 ~ /\./) next
+      } else {
+        prefix = route "."
+        if (substr($1, 1, length(prefix)) != prefix) next
+        if (substr($1, length(prefix) + 1) ~ /\./) next
+      }
+      print
+    }'
+}
+
+if [[ ${1-} == "--list" ]]; then
+  rows | awk -F'\t' 'NF >= 5 { printf "%s\t%s\n", $1, $3 }'
+  exit 0
+fi
+
+open() {
+  local route="$1"
+  local -a ids actions
+  local menu="" id icon label action condition
+
+  # Escape closes the menu; a Back row is what walks up a level, since a
+  # submenu opened straight from a key has no menu behind it to return to.
+  if [[ -n $route ]]; then
+    ids+=("..")
+    actions+=("-")
+    menu+="󰁍  Back"$'\n'
+  fi
+
+  while IFS=$'\t' read -r id icon label action condition; do
+    if [[ $condition != "-" ]] && ! eval "$condition" >/dev/null 2>&1; then
+      continue
+    fi
+    ids+=("$id")
+    actions+=("$action")
+    menu+="$icon  $label"$'\n'
+  done < <(children "$route")
+
+  (( ${#ids[@]} > 0 )) || return 0
+
+  local index
+  index=$(printf '%s' "$menu" |
+    fuzzel --dmenu --index --prompt "${route:-march}> " --lines 12) || return 0
+  # Typing something the list does not contain gives back no index at all, or
+  # one past the end; either way there is nothing to run.
+  [[ $index =~ ^[0-9]+$ ]] || return 0
+  (( index < ${#ids[@]} )) || return 0
+
+  id="${ids[$index]}"
+  action="${actions[$index]}"
+
+  if [[ $id == ".." ]]; then
+    local parent="${route%.*}"
+    [[ $parent == "$route" ]] && parent=""
+    open "$parent"
+  elif [[ $action == "-" ]]; then
+    open "$id"
+  else
+    # Detached, so the menu can exit without taking the program with it.
+    setsid -f bash -c "$action" >/dev/null 2>&1
+  fi
+}
+
+open "${1-}"

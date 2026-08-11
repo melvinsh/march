@@ -2,8 +2,8 @@
 
 A terminal UI that installs Arch Linux ARM on QEMU **completely unattended**
 and boots straight into a Hyprland desktop configured after
-[Omarchy](https://github.com/basecamp/omarchy). Answer five questions, walk away,
-come back to a working machine. Built with
+[Omarchy](https://github.com/basecamp/omarchy). Answer a handful of questions,
+walk away, come back to a working machine. Built with
 [Charm](https://github.com/charmbracelet)'s Bubble Tea v2, Bubbles, Lip Gloss
 and Huh.
 
@@ -74,7 +74,7 @@ than failing later with a raw QEMU error.
 | `?` | Full help |
 | `q` | Quit — running VMs keep running |
 
-Creating a VM asks for a name, desktop, username and password, then does
+Creating a VM asks for a name, username and password, then does
 everything else on its own: downloads the installer, allocates a sparse qcow2
 disk, partitions it, installs the base system and desktop, configures the
 account, installs the bootloader, and boots into the desktop with the user
@@ -117,14 +117,13 @@ show real progress and stop with a useful error rather than a timeout:
 
 The full console transcript is kept in `install.log` inside the VM directory.
 
-### Desktops
+### The desktop
 
-| Desktop | Notes |
-| --- | --- |
-| Hyprland (default) | Tiling Wayland compositor, configured after Omarchy |
-| XFCE | Traditional X11 desktop — the most forgiving fallback |
-| GNOME | Heavier; sluggish without GPU acceleration |
-| KDE Plasma | Feature-rich; also heavier to render |
+There is one, and it is not a choice: **Hyprland on SDDM, configured after
+Omarchy**, with the toolset and the menu described below. march used to offer
+XFCE, GNOME and Plasma as well, which meant scaling, autologin, window resizing
+and the whole toolset each existed in two or three variants that nothing
+verified equally. The desktop is the product.
 
 Stock QEMU on macOS has no OpenGL at all, so guests render on the CPU through
 llvmpipe. march ships its own QEMU that fixes this — see **Hardware
@@ -142,11 +141,12 @@ dispatchers.
 | --- | --- |
 | Compositor | Hyprland, with Omarchy's look and feel |
 | Bar | Waybar, with Omarchy's layout |
-| Launcher | fuzzel on `SUPER + SPACE` |
+| Menu | `march-menu` on `SUPER + SPACE` and the bar's Arch button |
+| Launcher | fuzzel on `SUPER + ALT + SPACE` |
 | Notifications | mako, `SUPER + ,` to dismiss |
-| Lock / idle | hyprlock, hypridle |
+| Lock | hyprlock |
 | Terminal | Alacritty on `SUPER + RETURN` |
-| Keys | `SUPER + K` lists every binding; `SUPER + ESCAPE` is the power menu |
+| Keys | `SUPER + K` lists every binding; `SUPER + ESCAPE` opens the System branch |
 
 None of Omarchy's own packages are built for aarch64, so bindings that called
 them are repointed at equivalents that are packaged (`grim`/`slurp` for
@@ -154,6 +154,46 @@ screenshots, `swayosd-client` for volume, `wiremix`, `nmtui`, `btop`) or
 dropped. Nothing is left as a shortcut that silently does nothing — a test
 enforces that every binding runs a program the install actually provides.
 Omarchy's launcher, walker, has no aarch64 package; fuzzel takes its place.
+
+### The menu
+
+Omarchy's bar is a front end for `omarchy-menu`: a tree of actions covering
+capture, clipboard, toggles, config editing, package management and power. That
+bar is a Quickshell plugin and quickshell has no aarch64 package, so march
+rebuilds the **content** on waybar and fuzzel. Route names are Omarchy's, so
+`march-menu capture` opens what `omarchy-menu toggle capture` opens.
+
+| Branch | What is in it |
+| --- | --- |
+| Apps | the launcher |
+| Learn | the key bindings, and the Hyprland, Arch and Bash references |
+| Capture | screenshots, annotation, colour picker, OCR, screen recording |
+| Clipboard | history, via cliphist |
+| Emoji | rofimoji, typed into the focused window |
+| Toggle | notification silencing, the bar, window gaps, workspace layout |
+| Setup | every config file the desktop reads, in `$EDITOR` |
+| Install / Remove | a package picker over pacman, and orphan cleanup |
+| Update | system packages, cache cleaning, `fastfetch` |
+| System | lock, log out, reboot, shut down |
+
+The bar gained the widgets that go with it: pending updates, a do-not-disturb
+indicator, a recording indicator, and a power button. Each is empty until it has
+something to say, as Omarchy's are.
+
+`SUPER + CTRL + C` opens Capture directly, `SUPER + CTRL + O` the toggles,
+`SUPER + CTRL + V` the clipboard, `SUPER + CTRL + E` the emoji picker —
+Omarchy's keys, unchanged.
+
+Two entries Omarchy has are missing on purpose. **Suspend** is not offered: the
+guest can enter it — `/sys/power/state` lists `mem` — but only a QMP
+`system_wakeup` brings the machine back, and neither march's window nor QEMU's
+has anything that sends one, so the entry would strand the VM. And there is **no
+idle daemon** — a guest window sits inside a host that already locks itself, so
+`hypridle` was removed rather than configured.
+
+Recording is the one place the tooling had to change rather than be repointed:
+Omarchy records with `gpu-screen-recorder`, which needs a hardware encoder that
+virtio-gpu does not have, so march uses `wf-recorder` and encodes on the CPU.
 
 The configuration lands in `/etc/skel`, so it is copied into the account at
 creation and is yours to edit. Provenance and the full list of changes are in
@@ -166,12 +206,34 @@ Omarchy has not migrated, so march's files are a hand translation of its
 v3.8.4 `.conf` — same bar, same bindings, same behaviour. Two shortcuts had to
 be rewritten rather than re-spelled, because the commands they shelled out to
 are gone in the Lua era: zoom now keeps its level in Lua instead of reading it
-back with `hyprctl keyword`, and the power menu's Log out dispatches
-`hl.dsp.exit()`.
+back with `hyprctl keyword`, and the menu's Log out dispatches `hl.dsp.exit()`.
 
-The chosen user is logged in automatically — via a LightDM/SDDM drop-in or
-GDM's `custom.conf` — so the machine really does land on a desktop rather than
-a login screen.
+The chosen user is logged in automatically through an SDDM drop-in, so the
+machine really does land on a desktop rather than a login screen.
+
+### The browser
+
+The browser is **Google Chrome**, and it is the one thing march installs that
+does not come from an Arch mirror. Google began shipping Linux builds for
+aarch64 in 2026, as `.deb` and `.rpm` only; no Arch package carries an aarch64
+build and march installs no AUR helper. So the install fetches Google's own
+`.deb` and unpacks it, which is what a PKGBUILD would do anyway.
+
+Two consequences worth stating plainly. Google's CDN is now a dependency of
+every install — if it is unreachable, the install fails rather than quietly
+falling back. And updates do not come from `pacman`: the cron job Google's
+package ships to add an apt repository is deliberately left out, since a machine
+with no apt would run it daily to no effect.
+
+Chrome is the default browser three ways over: the desktop entry in
+`mimeapps.list` for anything that asks `xdg-mime`, `$BROWSER` for anything that
+does not, and `apps.lua` for `SUPER + B`. Because Chrome still picks X11 unless
+told otherwise, every launch march controls passes `--ozone-platform=wayland`.
+
+Chrome's shared libraries are asked for by name in `chromePackages`, since
+pacman knows nothing about a package it did not install; the end-to-end test
+runs `ldd` against the unpacked binary so a missing one fails the build rather
+than the first click.
 
 ### The standard toolset
 
@@ -190,6 +252,19 @@ does not cross QEMU's NAT), `gpu-screen-recorder` (no hardware encoder),
 `hyprsunset` (no DRM gamma ramp), `gvfs-mtp` (no USB passthrough). Each omission
 carries its reason in `omittedForVirtualHardware`, and a test fails if one of
 them creeps back in.
+
+One more is omitted for a different reason. `system-config-printer`'s aarch64
+package installs the egg-info for its `cupshelpers` module without the module,
+so it stops at `No module named 'cupshelpers'` every time it opens — found by
+running it in a guest, not by reading a package list. CUPS' own interface on
+`localhost:631` adds a printer perfectly well, and `cups-pdf` needs no adding.
+
+Two programs needed a config before they worked at all here, and both now ship
+one. **hyprlock** refuses to start without a config file, which quietly made
+`SUPER + CTRL + L` and the menu's Lock do nothing. And **mpv**'s default GPU
+output cannot create a context behind virtio-gpu without acceleration; it then
+fell back to X11 and aborted on an assertion, so march names `wlshm` as the
+fallback and turns off hardware decoding that does not exist.
 
 Printing works the one way it can from behind user-mode networking: CUPS with
 `cups-pdf`, so **Print** always has somewhere to go.
@@ -223,13 +298,13 @@ Because a guest framebuffer is measured in the host's *physical* pixels, a
 Retina display gives a guest at full pixel density — sharp, but with everything
 half the size it would be on the host. march therefore sets the desktop's UI
 scale to **200%** by default, which is what makes the resolution readable
-rather than merely detailed. Wayland scales in the compositor, so Hyprland gets
-it through its `monitor` line; the X11 desktops get `GDK_SCALE`, XFCE's
-`WindowScalingFactor`, the LightDM greeter's DPI and `xrandr --dpi`.
+rather than merely detailed. Wayland scales in the compositor, so it arrives
+through Hyprland's `monitor` line; only what XWayland cannot learn from that —
+`QT_SCALE_FACTOR` and the cursor size — is set in the environment.
 
 **All keystrokes go to the guest**, including combinations macOS would
 otherwise intercept — `Cmd+Space` above all, which Hyprland binds to its
-launcher. This is QEMU's `full-grab`; macOS asks for accessibility permission
+menu. This is QEMU's `full-grab`; macOS asks for accessibility permission
 the first time, and without it the grab silently does not happen. Turn it off
 with `capture_all_keys: false` in `vm.json`.
 
@@ -243,11 +318,9 @@ march's. Its macOS backend offers two mutually exclusive window behaviours:
 
 march leaves it off, because turning it on makes QEMU ignore the configured
 resolution entirely and shrink the guest to a fixed ~640×414. Resolution is
-instead changed from inside the guest (Hyprland's `monitor` line, or XFCE's
-Display settings), and the window follows exactly. Setting `resizable_window: true` in `vm.json` opts into the
-draggable behaviour, and installs a helper that makes the guest follow the
-window; that helper is deliberately not installed otherwise, since it would
-override any resolution chosen inside the guest.
+instead changed from inside the guest, through Hyprland's `monitor` line, and
+the window follows exactly. Setting `resizable_window: true` in `vm.json` opts
+into the draggable behaviour.
 
 ## Hardware acceleration
 
@@ -284,17 +357,17 @@ The formula carries an out-of-tree patch that teaches QEMU's Cocoa display to
 render through OpenGL. Upstream has not merged this work, so the patch is
 rebased per QEMU release; provenance is in `Formula/patches/NOTICE`.
 
-### The browser is the exception
+### Chrome is the exception
 
-The desktop is accelerated; **Chromium is not**. Its WebGL works, but on
-SwiftShader — ANGLE's CPU rasterizer:
+The desktop is accelerated; **the browser is not**. Chrome's WebGL works, but
+on SwiftShader — ANGLE's CPU rasterizer:
 
 ```
 WebGL 2.0 (OpenGL ES 3.0 Chromium) :: ANGLE (Google, Vulkan 1.3.0
   (SwiftShader Device (LLVM 10.0.0)), SwiftShader driver)
 ```
 
-Chromium 151 routes all GL through ANGLE and refuses any other implementation
+Chrome 151 routes all GL through ANGLE and refuses any other implementation
 (`--use-gl=egl` fails with *"not found in allowed implementations:
 [(gl=egl-angle,angle=default)]"*). ANGLE's default backend is Vulkan, and the
 guest has no Vulkan driver for virtio-gpu, so it falls back to software.
@@ -520,3 +593,23 @@ marker instead of reporting success. The opt-in end-to-end test then performs a
 genuine install and logs into the finished system over its serial console to
 confirm the display manager, the network and an actual desktop session are all
 running.
+
+It does not stop there. `internal/vm/testdata/guest-selftest.sh` is fetched by
+the guest over the same loopback HTTP path the installer came from and run
+inside the live session, so the desktop is tested by using it: every
+application is launched and waited for until it maps a window, every menu route
+is opened, every toggle is flipped and read back, every button in the bar is
+clicked, every key is read out of the running compositor, a screenshot is taken
+and OCR'd, a recording is made and played back, and a tone is pushed through
+the sink. The picker and the region selector are answered by stand-ins on
+`PATH`, so the code behind them runs for real. Each check prints one line, and
+the Go test turns each one into a result.
+
+```sh
+MARCH_E2E=1 MARCH_E2E_KEEP=1 go test ./internal/vm/ -run TestUnattendedDesktopInstall -v
+MARCH_E2E_RERUN=1 go test ./internal/vm/ -run TestGuestSelftest -v   # against the kept VM
+```
+
+The first leaves the machine running; the second re-runs the in-guest suite
+against it, which is the way to iterate on the suite without paying for another
+install.

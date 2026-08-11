@@ -335,9 +335,6 @@ func (m *Manager) Install(ctx context.Context, name string, profile install.Prof
 	if v.ISOPath == "" {
 		return fmt.Errorf("%q has no installer image attached", name)
 	}
-	// The guest-side resize helper only makes sense when the window drives the
-	// guest, which is a property of the VM rather than of the profile.
-	profile.FollowHostResize = v.ResizableWindow
 	// Whether effects are affordable depends on how this machine actually
 	// renders. The GL device is only attached alongside a display backend with
 	// GL enabled, so a headless VM draws in software however capable the host
@@ -400,7 +397,6 @@ func (m *Manager) Install(ctx context.Context, name string, profile install.Prof
 	}
 
 	v.Installed = true
-	v.Desktop = string(profile.Desktop)
 	v.Username = profile.Username
 	return m.Store.Save(v)
 }

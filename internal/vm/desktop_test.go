@@ -2,8 +2,11 @@ package vm
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +20,12 @@ import (
 	"github.com/melvinsh/march/internal/install"
 	"github.com/melvinsh/march/internal/qemu"
 )
+
+// guestSelftest is run inside the installed desktop; see the script itself for
+// what it covers.
+//
+//go:embed testdata/guest-selftest.sh
+var guestSelftest string
 
 // TestUnattendedDesktopInstall is the product's whole promise in one test: from
 // nothing but a QEMU installation, download the installer, install Arch Linux
@@ -67,16 +76,20 @@ func TestUnattendedDesktopInstall(t *testing.T) {
 	if _, err := mgr.Create(ctx, CreateOptions{Spec: spec, ISOPath: iso}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	t.Cleanup(func() { _ = mgr.Delete(context.Background(), name) })
+	t.Cleanup(func() {
+		// Keeping the machine lets the in-guest self-test be re-run against it
+		// without paying for another install.
+		if os.Getenv("MARCH_E2E_KEEP") == "1" {
+			t.Logf("keeping VM %q (MARCH_E2E_KEEP=1)", name)
+			return
+		}
+		_ = mgr.Delete(context.Background(), name)
+	})
 
 	profile := install.DefaultProfile(name)
 	profile.Username = "arch"
 	profile.Password = "marchtest"
 	profile.Autologin = true
-	if d := os.Getenv("MARCH_E2E_DESKTOP"); d != "" {
-		profile.Desktop = install.Desktop(d)
-	}
-	t.Logf("desktop: %s", profile.Desktop)
 
 	// --- install -----------------------------------------------------------
 	start := time.Now()
@@ -113,16 +126,21 @@ func TestUnattendedDesktopInstall(t *testing.T) {
 	if !v.Installed {
 		t.Error("the VM was not marked installed")
 	}
-	if v.Username != profile.Username || v.Desktop != string(profile.Desktop) {
-		t.Errorf("install details were not recorded: user=%q desktop=%q, want %q/%q",
-			v.Username, v.Desktop, profile.Username, profile.Desktop)
+	if v.Username != profile.Username {
+		t.Errorf("install details were not recorded: user=%q, want %q",
+			v.Username, profile.Username)
 	}
 
 	// --- boot into the desktop ---------------------------------------------
 	if err := mgr.Start(ctx, name, qemu.BuildOptions{}); err != nil {
 		t.Fatalf("booting the installed system: %v", err)
 	}
-	t.Cleanup(func() { _ = mgr.Kill(context.Background(), name) })
+	t.Cleanup(func() {
+		if os.Getenv("MARCH_E2E_KEEP") == "1" {
+			return
+		}
+		_ = mgr.Kill(context.Background(), name)
+	})
 
 	c, err := console.Dial(ctx, store.Paths(name).SerialSocket)
 	if err != nil {
@@ -148,26 +166,8 @@ func TestUnattendedDesktopInstall(t *testing.T) {
 	loginCtx, loginCancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer loginCancel()
 
-	_ = c.SendLine("")
-	if _, err := c.Expect(loginCtx, "login:"); err != nil {
-		t.Fatalf("no serial login prompt appeared: %v\nconsole tail:\n%s", err, c.Tail(3000))
-	}
-	if err := c.SendLine(profile.Username); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := c.Expect(loginCtx, "Password:", "password:"); err != nil {
-		t.Fatalf("no password prompt: %v\nconsole tail:\n%s", err, c.Tail(2000))
-	}
-	if err := c.SendLine(profile.Password); err != nil {
-		t.Fatal(err)
-	}
-
-	// login takes a moment to hand over to the shell, and anything typed during
-	// that window is discarded, so wait for the prompt itself.
-	if _, err := c.Expect(loginCtx, "]$"); err != nil {
-		t.Fatalf("could not log in as %q with the configured password: %v\nconsole tail:\n%s",
-			profile.Username, err, c.Tail(2000))
-	}
+	loginOnConsole(t, ctx, c, profile.Username, profile.Password)
+	_ = loginCtx
 
 	// ask runs a command in the guest and returns its output.
 	//
@@ -193,12 +193,8 @@ func TestUnattendedDesktopInstall(t *testing.T) {
 		return strings.TrimSpace(out)
 	}
 
-	// Each desktop is verified through its own display manager and session
-	// process; the rest of the checks are common.
-	displayManager, sessionProc := "lightdm", "xfce4-session"
-	if profile.Desktop == install.DesktopHyprland {
-		displayManager, sessionProc = "sddm", "Hyprland"
-	}
+	// march installs one desktop: SDDM starts a Hyprland session.
+	const displayManager, sessionProc = "sddm", "Hyprland"
 
 	checks := []struct {
 		cmd, want, describe string
@@ -233,7 +229,7 @@ func TestUnattendedDesktopInstall(t *testing.T) {
 
 	// Hyprland brings a bar, a launcher and a compositor that must all be
 	// present for the desktop to be usable rather than merely running.
-	if profile.Desktop == install.DesktopHyprland {
+	{
 		if bar := ask("pgrep -u " + profile.Username + " -c waybar || echo 0"); strings.TrimSpace(bar) == "0" {
 			t.Errorf("waybar is not running; the top bar is missing")
 		}
@@ -242,9 +238,55 @@ func TestUnattendedDesktopInstall(t *testing.T) {
 		if mon := ask("sudo -u " + profile.Username + " " + hc + "hyprctl monitors | head -2"); !strings.Contains(mon, want) {
 			t.Errorf("hyprctl reports %q, want a monitor at the configured %s", mon, want)
 		}
-		// The launcher and the helper scripts the bindings call must exist.
-		if out := ask("command -v fuzzel march-keybindings march-powermenu"); strings.Count(out, "/") < 3 {
-			t.Errorf("launcher or helper scripts are missing: %q", out)
+		// The launcher and the helper scripts the bindings and the bar call must
+		// exist. This is the whole of march's menu: a missing one is a key or a
+		// bar button that silently does nothing.
+		helpers := []string{
+			"fuzzel", "march-menu", "march-keybindings", "march-term",
+			"march-bar", "march-toggle", "march-capture", "march-clipboard",
+			"march-pkg",
+		}
+		// command -v prints one path per program it finds and stays silent about
+		// the rest, so the line count is the number that exist.
+		if out := ask("command -v " + strings.Join(helpers, " ") + " | wc -l"); strings.TrimSpace(out) != fmt.Sprint(len(helpers)) {
+			t.Errorf("only %s of the %d menu helpers are on PATH:\n%s",
+				strings.TrimSpace(out), len(helpers),
+				ask("command -v "+strings.Join(helpers, " ")))
+		}
+		// And the programs those helpers reach for, none of which come with the
+		// compositor.
+		for _, bin := range []string{
+			"cliphist", "wl-clip-persist", "rofimoji", "wtype", "wf-recorder",
+			"satty", "notify-send", "checkupdates",
+		} {
+			if out := ask("command -v " + bin + " || echo MISSING"); strings.Contains(out, "MISSING") {
+				t.Errorf("%s is missing, so part of the menu does nothing", bin)
+			}
+		}
+
+		// The menu is a table parsed by awk at runtime; printing it proves both
+		// that the table survived the install and that the parse works here.
+		if tree := ask("march-menu --list | wc -l"); strings.TrimSpace(tree) == "0" {
+			t.Error("march-menu lists no entries, so the menu opens empty")
+		}
+		for _, route := range []string{"capture", "system", "update", "clipboard"} {
+			if out := ask("march-menu --list | grep -c '^" + route + "\\.'"); strings.TrimSpace(out) == "0" {
+				t.Errorf("the menu has no rows under %q, so that key opens nothing", route)
+			}
+		}
+
+		// waybar's custom modules are fed by these, and it logs an error and
+		// blanks the module for anything that is not JSON.
+		for _, module := range []string{"updates", "dnd", "recording"} {
+			out := ask("march-bar " + module + " | jq -e 'has(\"text\")' 2>&1")
+			if !strings.Contains(out, "true") {
+				t.Errorf("march-bar %s did not print JSON waybar can read: %q", module, out)
+			}
+		}
+
+		// Clipboard history only exists if something is recording it.
+		if out := ask("pgrep -u " + profile.Username + " -fc 'wl-paste' || echo 0"); strings.TrimSpace(out) == "0" {
+			t.Error("nothing is watching the clipboard, so the history is always empty")
 		}
 		// The keybindings helper reads from Hyprland itself; running it proves
 		// both that the bindings loaded and that the helper's jq actually works.
@@ -252,7 +294,10 @@ func TestUnattendedDesktopInstall(t *testing.T) {
 		// rather than by truncating the output.
 		// hyprctl reports the key as it was written in the config, so these are
 		// the XKB keysym spellings the Lua bindings use.
-		for _, want := range []string{"SUPER + space", "SUPER + Return", "SUPER + W", "ALT + Tab"} {
+		for _, want := range []string{
+			"SUPER + space", "SUPER + ALT + space", "SUPER + CTRL + C",
+			"SUPER + Return", "SUPER + W", "ALT + Tab",
+		} {
 			got := ask("sudo -u " + profile.Username + " " + hc +
 				"march-keybindings --list | grep -F " + shellQuote(want) + " | head -1")
 			if !strings.Contains(got, want) {
@@ -270,21 +315,6 @@ func TestUnattendedDesktopInstall(t *testing.T) {
 	// first, which is readable without a display connection.
 	if mode := ask("cat /sys/class/drm/*/modes 2>/dev/null | head -1"); !strings.Contains(mode, want) {
 		t.Errorf("guest display mode is %q, want the configured %s", mode, want)
-	}
-
-	// The X desktops must actually be using that mode, not merely offering it.
-	// Hyprland is checked through hyprctl above.
-	if profile.Desktop != install.DesktopHyprland {
-		xenv := "DISPLAY=:0 XAUTHORITY=/home/" + profile.Username + "/.Xauthority "
-		if mode := ask(xenv + "xrandr --query | awk '/\\*/{print $1; exit}'"); !strings.Contains(mode, want) {
-			t.Errorf("X is running at %q, want the configured %s", mode, want)
-		}
-	}
-
-	// By default the window is sized from the guest, so the guest owns its
-	// resolution and the follow-the-window helper must stay out of the way.
-	if out := ask("ls /usr/local/bin/march-autoresize 2>&1"); !strings.Contains(out, "No such file") {
-		t.Errorf("the resize helper was installed for a guest that owns its resolution: %s", out)
 	}
 
 	// The standard toolset. A package that vanished from the repos aborts the
@@ -309,6 +339,25 @@ func TestUnattendedDesktopInstall(t *testing.T) {
 	if !strings.Contains(sinks, "hda") && !strings.Contains(sinks, "HDA") &&
 		!strings.Contains(sinks, "Built-in") && !strings.Contains(sinks, "Audio") {
 		t.Errorf("pipewire reports no sink, so the guest has no working audio:\n%s", sinks)
+	}
+
+	// The browser. Chrome is the one thing march installs that pacman knows
+	// nothing about, so nothing resolved its shared libraries for it and
+	// nothing would notice a missing one until a user clicked the icon.
+	if out := ask("command -v google-chrome-stable || echo MISSING"); strings.Contains(out, "MISSING") {
+		t.Error("Google Chrome is not installed")
+	}
+	if out := ask("ldd /opt/google/chrome/chrome 2>&1 | grep -c 'not found'"); strings.TrimSpace(out) != "0" {
+		t.Errorf("Chrome is missing shared libraries (%s):\n%s", strings.TrimSpace(out),
+			ask("ldd /opt/google/chrome/chrome 2>&1 | grep 'not found' | head -5"))
+	}
+	// Running it is the only proof that the unpacked tree is complete.
+	if out := ask("google-chrome-stable --version 2>&1"); !strings.Contains(out, "Google Chrome") {
+		t.Errorf("Chrome does not run: %q", out)
+	}
+	// Installed is half of it; being *the* browser is the other half.
+	if out := ask("xdg-settings get default-web-browser 2>&1"); !strings.Contains(out, "google-chrome.desktop") {
+		t.Errorf("the default browser is %q, want Google Chrome", strings.TrimSpace(out))
 	}
 
 	// The firewall must be up — `ufw status` needs root, which this console
@@ -341,8 +390,123 @@ func TestUnattendedDesktopInstall(t *testing.T) {
 		t.Errorf("the installed system has failed units:\n%s", failed)
 	}
 
-	t.Logf("unattended install to a working %s desktop took %s",
-		strings.ToUpper(string(profile.Desktop)), time.Since(start).Round(time.Second))
+	t.Logf("unattended install to a working desktop took %s",
+		time.Since(start).Round(time.Second))
+
+	// Everything above is what can be seen from outside the session. The rest
+	// of the desktop — every application it installs, every menu route, every
+	// toggle, the bar's own buttons — is exercised inside it.
+	runGuestSelftest(t, ctx, c, profile.Username)
+}
+
+// loginOnConsole logs in on the guest's serial getty and leaves a shell prompt
+// waiting. A console that is already logged in — a second run against the same
+// machine — is answered by the prompt itself rather than by a login banner.
+func loginOnConsole(t *testing.T, ctx context.Context, c *console.Console, user, password string) {
+	t.Helper()
+
+	loginCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	// A getty that has only just started drops what is typed at it, and the
+	// banner it prints looks the same either way, so the username is offered
+	// again rather than the whole test failing on a race with the console.
+	for attempt := 0; attempt < 3; attempt++ {
+		_ = c.SendLine("")
+		which, err := c.Expect(loginCtx, "login:", "]$")
+		if err != nil {
+			t.Fatalf("no serial login prompt appeared: %v\nconsole tail:\n%s", err, c.Tail(3000))
+		}
+		if which == "]$" {
+			return // a shell is already waiting
+		}
+
+		if err := c.SendLine(user); err != nil {
+			t.Fatal(err)
+		}
+		promptCtx, promptCancel := context.WithTimeout(loginCtx, 45*time.Second)
+		_, err = c.Expect(promptCtx, "Password:", "password:")
+		promptCancel()
+		if err != nil {
+			continue
+		}
+
+		if err := c.SendLine(password); err != nil {
+			t.Fatal(err)
+		}
+		// login takes a moment to hand over to the shell, and anything typed
+		// during that window is discarded, so wait for the prompt itself.
+		if _, err := c.Expect(loginCtx, "]$"); err != nil {
+			t.Fatalf("could not log in as %q with the configured password: %v\nconsole tail:\n%s",
+				user, err, c.Tail(2000))
+		}
+		return
+	}
+	t.Fatalf("the console never offered a password prompt for %q\nconsole tail:\n%s",
+		user, c.Tail(3000))
+}
+
+// runGuestSelftest hands the guest testdata/guest-selftest.sh over the same
+// loopback HTTP path the installer uses, runs it inside the live session, and
+// turns each line it prints into a test result.
+func runGuestSelftest(t *testing.T, ctx context.Context, c *console.Console, user string) {
+	t.Helper()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("serving the self-test: %v", err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, guestSelftest)
+	})}
+	go func() { _ = srv.Serve(ln) }()
+	defer func() { _ = srv.Close() }()
+	port := ln.Addr().(*net.TCPAddr).Port
+
+	// 10.0.2.2 is the host as QEMU's user-mode network presents it — the same
+	// address the install script was fetched from.
+	command := fmt.Sprintf(
+		"curl -fsS -o /tmp/selftest.sh http://10.0.2.2:%d/selftest.sh && bash /tmp/selftest.sh", port)
+
+	if err := c.SendLine(`printf '%s\n' "M-SE""LF"; ` + command + ` 2>&1; printf '%s\n' "M-DO""NE"`); err != nil {
+		t.Fatalf("starting the self-test: %v", err)
+	}
+	// The suite launches a dozen applications and records video, so it is given
+	// far longer than an ordinary console command.
+	runCtx, cancel := context.WithTimeout(ctx, 25*time.Minute)
+	defer cancel()
+	if _, err := c.Expect(runCtx, "M-SELF"); err != nil {
+		t.Fatalf("the guest never started the self-test: %v", err)
+	}
+	_, out, err := c.ExpectCapture(runCtx, "M-DONE")
+	if err != nil {
+		t.Fatalf("the self-test did not finish: %v\nlast output:\n%s", err, c.Tail(4000))
+	}
+
+	var passed, failed, skipped int
+	var done bool
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "PASS "):
+			passed++
+		case strings.HasPrefix(line, "SKIP "):
+			skipped++
+			t.Logf("skipped: %s", strings.TrimPrefix(line, "SKIP "))
+		case strings.HasPrefix(line, "FAIL "):
+			failed++
+			t.Errorf("in-guest: %s", strings.TrimPrefix(line, "FAIL "))
+		case strings.HasPrefix(line, "SELFTEST-DONE"):
+			done = true
+		}
+	}
+	if !done {
+		t.Fatalf("the self-test stopped partway; captured:\n%s", out)
+	}
+	t.Logf("in-guest self-test: %d passed, %d failed, %d skipped", passed, failed, skipped)
+	if passed == 0 {
+		t.Error("the self-test reported nothing at all")
+	}
 }
 
 // shellQuote renders a value as a single-quoted shell word, so a pattern can be

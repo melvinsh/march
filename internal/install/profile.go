@@ -15,61 +15,16 @@ import (
 	"strings"
 )
 
-// Desktop is a graphical environment march can install.
-type Desktop string
-
+// The desktop march installs. There is exactly one: a tiling Wayland
+// compositor configured after Omarchy, on SDDM. march used to offer XFCE,
+// GNOME and Plasma as well, which meant every path — scaling, autologin,
+// window resizing, the whole toolset — existed in two or three variants that
+// nothing verified equally. The desktop is the product, so it is no longer a
+// choice.
 const (
-	// DesktopHyprland is the default: a tiling Wayland compositor configured
-	// after Omarchy. It runs acceptably under software rendering once blur,
-	// shadows and animations are off.
-	DesktopHyprland Desktop = "hyprland"
-	// DesktopXFCE is the traditional X11 fallback. Under QEMU there is no host GPU passthrough
-	// and Mesa falls back to software rendering, which XFCE handles well while
-	// heavier compositors struggle.
-	DesktopXFCE Desktop = "xfce"
-	// DesktopGNOME is a full GNOME session on GDM.
-	DesktopGNOME Desktop = "gnome"
-	// DesktopPlasma is a full KDE Plasma session on SDDM.
-	DesktopPlasma Desktop = "plasma"
+	displayManager = "sddm"
+	sessionName    = "hyprland"
 )
-
-// Desktops lists the choices in presentation order.
-var Desktops = []Desktop{DesktopHyprland, DesktopXFCE, DesktopGNOME, DesktopPlasma}
-
-// Description explains a desktop in terms of the trade-off it makes.
-func (d Desktop) Description() string {
-	switch d {
-	case DesktopHyprland:
-		return "Tiling Wayland compositor, configured after Omarchy"
-	case DesktopXFCE:
-		return "Traditional X11 desktop — the most forgiving fallback"
-	case DesktopGNOME:
-		return "Full GNOME — heavier; sluggish without GPU acceleration"
-	case DesktopPlasma:
-		return "Full KDE Plasma — feature-rich; heavier to render"
-	default:
-		return "Tiling Wayland compositor, configured after Omarchy"
-	}
-}
-
-// packages returns the desktop's package list and the display manager and
-// session name that go with it.
-func (d Desktop) packages() (pkgs []string, displayManager, session string) {
-	switch d {
-	case DesktopHyprland:
-		return hyprlandPackages, "sddm", "hyprland"
-	case DesktopGNOME:
-		return []string{"gnome", "gdm"}, "gdm", "gnome"
-	case DesktopPlasma:
-		return []string{"plasma-meta", "sddm", "konsole", "dolphin"}, "sddm", "plasma"
-	default:
-		return []string{
-			"xfce4", "xfce4-goodies",
-			"lightdm", "lightdm-gtk-greeter",
-			"xterm",
-		}, "lightdm", "xfce"
-	}
-}
 
 // Profile describes the system to install.
 type Profile struct {
@@ -77,7 +32,6 @@ type Profile struct {
 	Username string
 	Password string
 
-	Desktop   Desktop
 	Autologin bool
 
 	// ScalePercent is the desktop's UI scale. A VM framebuffer matches the
@@ -96,12 +50,6 @@ type Profile struct {
 	// even on a guest whose desktop is accelerated.
 	VulkanAccelerated bool
 
-	// FollowHostResize installs a helper that makes the guest adopt the host
-	// window's size. It belongs only with a resizable window: when the window
-	// is instead sized from the guest, the helper would undo any resolution
-	// the user picks inside the guest.
-	FollowHostResize bool
-
 	Timezone string
 	Locale   string
 	Keymap   string
@@ -119,7 +67,6 @@ func DefaultProfile(hostname string) Profile {
 	return Profile{
 		Hostname:     hostname,
 		Username:     "arch",
-		Desktop:      DesktopHyprland,
 		Autologin:    true,
 		Timezone:     "UTC",
 		Locale:       "en_US.UTF-8",
@@ -162,11 +109,6 @@ func (p *Profile) Validate() error {
 	if p.Disk == "" {
 		return errors.New("target disk is required")
 	}
-	switch p.Desktop {
-	case DesktopHyprland, DesktopXFCE, DesktopGNOME, DesktopPlasma:
-	default:
-		return fmt.Errorf("unknown desktop %q", p.Desktop)
-	}
 	if strings.ContainsAny(p.Hostname, " \t\n") {
 		return errors.New("hostname cannot contain whitespace")
 	}
@@ -189,9 +131,6 @@ func (p Profile) withDefaults() Profile {
 	}
 	if p.Disk == "" {
 		p.Disk = "/dev/vda"
-	}
-	if p.Desktop == "" {
-		p.Desktop = DesktopHyprland
 	}
 	if p.Username == "" {
 		p.Username = "arch"

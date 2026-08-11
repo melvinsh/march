@@ -1,17 +1,19 @@
-// Top bar, from Omarchy v3.8.4 (see NOTICE).
+// Top bar, from Omarchy (see NOTICE).
 //
-// Omarchy's custom modules (its menu button, updates, weather, screen-recording
-// and dictation indicators) all shell out to omarchy-* binaries that have no
-// aarch64 package, so they are dropped rather than left as dead widgets.
+// Omarchy's bar is a Quickshell plugin and quickshell has no aarch64 package,
+// so the widgets are rebuilt on waybar and its click targets point at march's
+// own helpers rather than at omarchy-* binaries. Its bluetooth, battery,
+// brightness, weather, keyboard-layout and agent widgets are dropped: nothing
+// behind QEMU's virt machine answers to them.
 {
   "reload_style_on_change": true,
   "layer": "top",
   "position": "top",
   "spacing": 0,
   "height": 26,
-  "modules-left": ["custom/launcher", "hyprland/workspaces"],
-  "modules-center": ["clock"],
-  "modules-right": ["tray", "network", "pulseaudio", "cpu", "memory"],
+  "modules-left": ["custom/menu", "hyprland/workspaces"],
+  "modules-center": ["custom/dnd", "custom/recording", "clock", "custom/update"],
+  "modules-right": ["tray", "network", "pulseaudio", "cpu", "memory", "custom/power"],
 
   "hyprland/workspaces": {
     "on-click": "activate",
@@ -25,10 +27,11 @@
     "persistent-workspaces": { "1": [], "2": [], "3": [], "4": [], "5": [] }
   },
 
-  "custom/launcher": {
+  // Omarchy's menu button, in the same corner and opening the same tree.
+  "custom/menu": {
     "format": "󰣇",
-    "on-click": "fuzzel",
-    "tooltip-format": "Launch apps  (SUPER + SPACE)"
+    "on-click": "march-menu",
+    "tooltip-format": "Menu  (SUPER + SPACE)"
   },
 
   "clock": {
@@ -37,34 +40,74 @@
     "tooltip": false
   },
 
+  // Pending updates, after Omarchy's SystemUpdate widget. checkupdates has to
+  // sync its own database copy, so this is deliberately infrequent; the module
+  // hides itself when there is nothing to install.
+  "custom/update": {
+    "exec": "march-bar updates",
+    "return-type": "json",
+    "interval": 1800,
+    "signal": 7,
+    "on-click": "march-menu update"
+  },
+
+  // The two indicators worth keeping from Omarchy's set. Both are driven by
+  // signals rather than polling: nothing changes them but the user.
+  "custom/dnd": {
+    "exec": "march-bar dnd",
+    "return-type": "json",
+    "interval": "once",
+    "signal": 8,
+    "on-click": "march-toggle dnd"
+  },
+
+  "custom/recording": {
+    "exec": "march-bar recording",
+    "return-type": "json",
+    "interval": "once",
+    "signal": 9,
+    "on-click": "march-capture record-stop"
+  },
+
   "network": {
     "format-wifi": "󰤨",
     "format-ethernet": "󰈀",
     "format-disconnected": "󰤭",
     "tooltip-format": "{ifname}  {ipaddr}",
-    "on-click": "alacritty -e nmtui"
+    "on-click": "march-term nmtui",
+    "on-click-right": "march-menu setup"
   },
 
   "pulseaudio": {
     "format": "{icon}",
     "format-muted": "󰝟",
     "format-icons": { "default": ["󰕿", "󰖀", "󰕾"] },
-    "on-click": "alacritty -e wiremix",
+    "on-click": "march-term wiremix",
+    "on-click-right": "swayosd-client --output-volume mute-toggle",
     "tooltip-format": "{volume}%"
   },
 
   "cpu": {
     "interval": 5,
     "format": "󰍛",
-    "on-click": "alacritty -e btop",
+    "on-click": "march-term btop",
     "tooltip-format": "{usage}%"
   },
 
   "memory": {
     "interval": 5,
     "format": "󰾆",
+    "on-click": "march-term btop",
     "tooltip-format": "{percentage}% of {total:0.1f} GiB"
   },
 
-  "tray": { "spacing": 12 }
+  "tray": { "spacing": 12 },
+
+  // Omarchy ends its bar with power; here it opens the same System branch that
+  // SUPER + ESCAPE does.
+  "custom/power": {
+    "format": "󰤆",
+    "on-click": "march-menu system",
+    "tooltip-format": "System  (SUPER + ESCAPE)"
+  }
 }

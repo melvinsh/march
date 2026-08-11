@@ -380,7 +380,7 @@ func TestNewVMOpensWizard(t *testing.T) {
 		t.Fatal("the wizard model was not built")
 	}
 	content := m.View().Content
-	for _, want := range []string{"Machine name", "Desktop"} {
+	for _, want := range []string{"Machine name"} {
 		if !strings.Contains(content, want) {
 			t.Errorf("the wizard is missing the %q field; got:\n%s", want, content)
 		}
@@ -764,8 +764,7 @@ func TestWizardCompletesOnNonKeyMessage(t *testing.T) {
 		}
 	}
 
-	next()                          // name -> desktop
-	next()                          // -> username
+	next()                          // name -> username
 	next()                          // -> password
 	typeText("hunter2")             // the only field with no usable default
 	next()                          // -> vCPUs

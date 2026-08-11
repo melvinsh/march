@@ -1,4 +1,4 @@
-/* Top bar styling, after Omarchy v3.8.4 (see NOTICE). */
+/* Top bar styling, after Omarchy (see NOTICE). */
 
 * {
   font-family: "JetBrainsMono Nerd Font", monospace;
@@ -28,7 +28,7 @@ window#waybar {
   background: #283457;
 }
 
-#custom-launcher {
+#custom-menu {
   color: #7dcfff;
   padding: 0 12px 0 10px;
   font-size: 14px;
@@ -39,11 +39,28 @@ window#waybar {
   font-weight: bold;
 }
 
-#network, #pulseaudio, #cpu, #memory, #tray {
+#network, #pulseaudio, #cpu, #memory, #tray, #custom-power {
   padding: 0 8px;
   color: #a9b1d6;
 }
 
 #network.disconnected {
+  color: #f7768e;
+}
+
+/* Indicators. Each is empty — and so invisible — until it has something to
+   report, which is why they carry padding only when a class is set. */
+#custom-update.pending {
+  padding: 0 8px;
+  color: #9ece6a;
+}
+
+#custom-dnd.active {
+  padding: 0 8px;
+  color: #e0af68;
+}
+
+#custom-recording.active {
+  padding: 0 8px;
   color: #f7768e;
 }

@@ -1,0 +1,138 @@
+#!/bin/bash
+# Screenshots, OCR and screen recording — Omarchy's omarchy-capture-* family,
+# rebuilt on what is packaged for aarch64.
+#
+# Omarchy records with gpu-screen-recorder, which needs VAAPI or NVENC; virtio-
+# gpu exposes no hardware encoder, so wf-recorder encodes with libx264 on the
+# CPU instead. Expect a busy guest while it runs.
+#
+# The pointer is drawn into the framebuffer here (looknfeel.lua disables
+# hardware cursors, because this GPU has no cursor plane), so it appears in
+# captures. Omarchy switches hardware cursors on around grim to avoid that;
+# there is nothing to switch to on this hardware.
+set -uo pipefail
+
+# shellcheck source=/dev/null
+[[ -f $HOME/.config/user-dirs.dirs ]] && source "$HOME/.config/user-dirs.dirs"
+PICTURES="${XDG_PICTURES_DIR:-$HOME/Pictures}"
+VIDEOS="${XDG_VIDEOS_DIR:-$HOME/Videos}"
+
+note() {
+  notify-send -a march "$@" 2>/dev/null || true
+}
+
+stamp() {
+  date +'%Y-%m-%d_%H-%M-%S'
+}
+
+latest_shot() {
+  ls -t "$PICTURES"/screenshot-*.png 2>/dev/null | head -1
+}
+
+# Saves to disk and to the clipboard both, as Omarchy does: the file is what
+# survives, the clipboard is what gets pasted straight into a chat window.
+keep_shot() {
+  local file="$1"
+  wl-copy --type image/png <"$file"
+  note "Screenshot saved" "$file"
+  printf '%s\n' "$file"
+}
+
+case "${1-}" in
+  region)
+    mkdir -p "$PICTURES"
+    geometry=$(slurp 2>/dev/null) || exit 0
+    [[ -z $geometry ]] && exit 0
+    file="$PICTURES/screenshot-$(stamp).png"
+    grim -g "$geometry" "$file" || exit 1
+    keep_shot "$file"
+    ;;
+
+  screen)
+    mkdir -p "$PICTURES"
+    file="$PICTURES/screenshot-$(stamp).png"
+    grim "$file" || exit 1
+    keep_shot "$file"
+    ;;
+
+  annotate)
+    file=$(latest_shot)
+    if [[ -z $file ]]; then
+      note "Nothing to annotate" "No screenshot in $PICTURES yet"
+      exit 0
+    fi
+    # Written beside the original rather than over it: the point of annotating
+    # is usually to keep both.
+    exec satty --filename "$file" --output-filename "${file%.png}-annotated.png"
+    ;;
+
+  # Used as the menu's `when` for the annotate row, so it stays hidden until
+  # there is something to open.
+  latest)
+    file=$(latest_shot)
+    [[ -n $file ]] || exit 1
+    printf '%s\n' "$file"
+    ;;
+
+  color)
+    # Toggling: a second press closes the picker rather than opening another.
+    pkill hyprpicker || exec hyprpicker -a
+    ;;
+
+  text)
+    geometry=$(slurp 2>/dev/null) || exit 0
+    [[ -z $geometry ]] && exit 0
+    text=$(grim -g "$geometry" - |
+      tesseract stdin stdout --oem 1 --psm 6 -l "${MARCH_OCR_LANGS:-eng}" --dpi 300 \
+        -c preserve_interword_spaces=1 2>/dev/null)
+    if [[ -z $text ]]; then
+      note "No text found" "OCR read nothing in that region"
+      exit 1
+    fi
+    printf '%s' "$text" | wl-copy
+    note "Text copied to the clipboard"
+    ;;
+
+  record)
+    if pgrep -x wf-recorder >/dev/null 2>&1; then
+      note "Already recording" "Stop the current recording first"
+      exit 0
+    fi
+    mkdir -p "$VIDEOS"
+    file="$VIDEOS/recording-$(stamp).mp4"
+    args=(-f "$file")
+    if [[ ${2-} == "--audio" ]]; then
+      # The sink's monitor is what carries what the guest is playing; without it
+      # --audio would record the microphone, which is not what "with audio"
+      # means for a screen recording.
+      sink=$(pactl get-default-sink 2>/dev/null)
+      if [[ -n $sink ]]; then
+        args+=("--audio=$sink.monitor")
+      else
+        args+=(--audio)
+      fi
+    fi
+    setsid -f wf-recorder "${args[@]}" >/dev/null 2>&1
+    note "Recording" "$file"
+    sleep 1
+    pkill -RTMIN+9 waybar 2>/dev/null || true
+    ;;
+
+  record-stop)
+    # wf-recorder finalises the container on SIGINT; killing it any harder
+    # leaves an unplayable file.
+    pkill -INT -x wf-recorder || exit 0
+    note "Recording stopped" "$(ls -t "$VIDEOS"/recording-*.mp4 2>/dev/null | head -1)"
+    sleep 1
+    pkill -RTMIN+9 waybar 2>/dev/null || true
+    ;;
+
+  record-status)
+    pgrep -x wf-recorder >/dev/null 2>&1
+    ;;
+
+  *)
+    echo "usage: march-capture region|screen|annotate|latest|color|text|record [--audio]|record-stop|record-status" >&2
+    exit 2
+    ;;
+esac
