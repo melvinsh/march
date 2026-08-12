@@ -124,3 +124,27 @@ var omittedForVirtualHardware = []string{
 //
 // Found by running it in a guest rather than by reading the package list.
 var omittedBrokenOnARM = []string{"system-config-printer"}
+
+// audioLatencySnippet deepens the buffers the guest's audio pipeline requests
+// from the emulated hda device. The stock settings are a 1024-frame quantum
+// and a shallow ALSA period; QEMU's coreaudio callback then runs the device
+// dry whenever the pipeline hiccups, and the guest plays a short silence
+// instead of audio. Measured on Apple Silicon: Chrome's client blipped on
+// every stream with the defaults and plays clean with these.
+func audioLatencySnippet() string {
+	return `mkdir -p /etc/pipewire/pipewire.conf.d /etc/wireplumber/wireplumber.conf.d
+cat > /etc/pipewire/pipewire.conf.d/99-latency.conf <<'MARCHPW'
+context.properties = {
+    default.clock.quantum = 2048
+    default.clock.min-quantum = 2048
+    default.clock.max-quantum = 8192
+}
+MARCHPW
+cat > /etc/wireplumber/wireplumber.conf.d/99-alsa-buffer.conf <<'MARCHWP'
+monitor.alsa.rules = [
+    { matches = [ { node.name = "alsa_output.*" } ]
+      actions = { update-props = { api.alsa.period-size = 2048  api.alsa.headroom = 1024  api.alsa.buffer-size = 8192 } } }
+]
+MARCHWP
+`
+}

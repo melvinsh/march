@@ -113,6 +113,36 @@ without WebGL instead. A guest that needs it can say so itself:
 Everything else in the desktop (the compositor, its effects, and every native
 application) is accelerated.
 
+### Chrome's SIGILL crash on Apple Silicon, and the `arm64.nosme` fix
+
+A second failure waited inside the software path: on march's Apple Silicon
+guests, Chrome died outright on heavy pages (YouTube's watch page reliably,
+about a minute in) with an illegal-instruction crash in the renderer. The
+faulting instruction was `cntd x9` — a Scalable Matrix Extension (SME)
+instruction — in a function prologue Chrome reaches for its SME-accelerated
+code when the feature is advertised:
+
+```
+[renderer] Illegal instruction (core dumped)
+```
+
+The kernel of the guest advertises SME because the Apple M5 host has it, but
+the hvf guest cannot execute it — `cntd` and SVE's `ptrue` both raise
+SIGILL in the VM, while the same instructions are fine on macOS itself. This
+is a hypervisor-level gap on Apple Silicon: HVF does not deliver SME/SVE
+state to the guest the way it does on the host, and the guest pays for the
+advertisement with a crash in anything that believes it.
+
+The fix is to stop advertising the feature at all. The installed system boots
+with `arm64.nosme` on the kernel command line (written by the install script
+into GRUB), the kernel hides SME from `/proc/cpuinfo`, and Chrome's runtime
+detection leaves the SME code path unused. The browser then renders in
+software without crashing; what is lost is only an accelerator that would not
+have worked.
+
+When the hvf gap is fixed (or a host without SME is used), the flag can go:
+`arm64.nosme` is a one-line removal from `internal/install/script.go`.
+
 ### Venus, and why it cannot run on macOS
 
 Venus forwards the guest's Vulkan to the host GPU, which would put the browser

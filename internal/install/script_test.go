@@ -404,6 +404,30 @@ func TestScriptBootloader(t *testing.T) {
 	if strings.Contains(s, `GRUB_CMDLINE_LINUX_DEFAULT="quiet`) {
 		t.Error("the installed system boots quietly, hiding the readiness signal")
 	}
+	// Chrome's aarch64 build SIGILLs on SME instructions in the hvf guests
+	// march runs on Apple Silicon, killing every tab on heavy pages. The kernel
+	// param hides the feature so Chrome never reaches for it.
+	if !strings.Contains(s, "arm64.nosme") {
+		t.Error("the installed system does not hide SME from the kernel")
+	}
+}
+
+// The emulated hda device underflows on the stock guest buffers, playing short
+// silences over every audio stream; the install writes deeper PipeWire and
+// ALSA settings instead.
+func TestScriptAudioBuffers(t *testing.T) {
+	s := mustScript(t, testProfile())
+
+	for _, want := range []string{
+		"/etc/pipewire/pipewire.conf.d/99-latency.conf",
+		"default.clock.quantum = 2048",
+		"/etc/wireplumber/wireplumber.conf.d/99-alsa-buffer.conf",
+		"api.alsa.period-size = 2048",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("the audio latency config is missing %q", want)
+		}
+	}
 }
 
 // GRUB answers an error inside a menu entry by waiting ten seconds for a

@@ -249,6 +249,14 @@ func Script(p Profile) (string, error) {
 	// the graphics flags this particular guest earned.
 	b.WriteString(chromeLauncherSnippet(p))
 	b.WriteString(chromeDefaultsSnippet())
+	// The hda device QEMU emulates underflows when the buffers the guest asks
+	// for are small: Chrome's audio client runs at a 1024-frame quantum, and a
+	// busy page can starve the audio thread long enough for the device to run
+	// dry, which plays as short silences. The deep period and buffer below let
+	// the pipeline coast over scheduling jitter instead of clipping. Measured
+	// on Apple Silicon: the stock settings blip on every audio stream, these
+	// play clean.
+	b.WriteString(audioLatencySnippet())
 	w(``)
 	w(`useradd -m -G wheel,video,audio,input -s /bin/bash %s`, shellQuote(p.Username))
 	// Without this every docker command needs sudo. The group comes from the
@@ -305,7 +313,12 @@ func Script(p Profile) (string, error) {
 	// visible boot progress is worth more than a clean splash, and measuring it
 	// showed the log costs nothing — a quiet boot and a verbose one reach the
 	// desktop in the same 4.2 seconds.
-	w(`sed -i 's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT="console=tty0 console=ttyAMA0,115200"|' /etc/default/grub`)
+	//
+	// arm64.nosme hides SME from the kernel. Chrome's aarch64 build reaches for
+	// SME instructions (cntd/smstart) when the feature is advertised, and the
+	// hvf guests march runs on Apple Silicon SIGILL on them — every tab died on
+	// YouTube until this was measured and added. See docs/GRAPHICS.md.
+	w(`sed -i 's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT="console=tty0 console=ttyAMA0,115200 arm64.nosme"|' /etc/default/grub`)
 	// The guest boots without an initramfs, and that is the single largest
 	// saving in the whole boot: 2.2 seconds of a 6.4-second one, measured by
 	// booting the same disk both ways. An initramfs exists to load the drivers
