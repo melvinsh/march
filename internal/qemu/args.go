@@ -376,7 +376,12 @@ func consoleArgs(v config.VM, caps *host.Caps, p config.Paths, installing bool) 
 func displaySpec(v config.VM, gl bool) string {
 	switch v.Display {
 	case config.DisplayCocoa:
-		opts := []string{v.Display, "show-cursor=on"}
+		// show-cursor is deliberately absent. It forces QEMU to keep drawing the
+		// host's pointer over the window, and the guest draws its own on top of
+		// the same absolute coordinates — two cursors, a few pixels apart,
+		// moving together. With a usb-tablet the guest's is the accurate one, so
+		// the host's is the one to leave out.
+		opts := []string{v.Display}
 		if gl {
 			// The display backend has to be told to accept GL, or QEMU refuses
 			// the virtio-gpu-gl device outright.

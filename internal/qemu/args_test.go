@@ -358,6 +358,11 @@ func TestBuildHeadlessVsWindowed(t *testing.T) {
 		if _, ok := findValue(args, "-device", "usb-tablet"); !ok {
 			t.Error("a windowed machine needs an absolute pointing device")
 		}
+		// The guest draws its own pointer at the same absolute coordinates, so
+		// forcing the host's on as well shows two cursors moving together.
+		if strings.Contains(argMap(args)["-display"][0], "show-cursor") {
+			t.Error("the host pointer is drawn on top of the guest's own")
+		}
 	})
 }
 
