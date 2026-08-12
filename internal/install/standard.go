@@ -94,9 +94,11 @@ var standardPackages = []string{
 //	gpu-screen-recorder              virtio-gpu exposes no hardware encoder
 //	hyprsunset                       needs a DRM gamma ramp this GPU lacks
 //	moonlight-qt                     game streaming without hardware decode
-//	plymouth                         a boot splash needs a quiet kernel command
-//	                                 line, which would hide the console output
-//	                                 the installer reads
+//	plymouth                         a boot splash nobody can see: QEMU's macOS
+//	                                 display only shows what the guest renders
+//	                                 through virgl, so the window stays black
+//	                                 until the compositor's first frame however
+//	                                 much the guest draws before it
 //	uwsm                             would replace the SDDM session march uses
 //	hypridle                         a guest window sits inside a host that
 //	                                 already locks itself, so idling it only

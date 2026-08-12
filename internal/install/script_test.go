@@ -154,7 +154,15 @@ func dryRun(t *testing.T, p Profile, failAt string) (string, error) {
 		"mount":     "exit 0",
 		"umount":    "exit 0",
 		"udevadm":   "exit 0",
-		"genfstab":  "echo '# fstab'",
+		// Real genfstab output, because the script rewrites the ESP's line into
+		// an automount and refuses to continue if the rewrite did not take.
+		"genfstab": `cat <<'FSTAB'
+# /dev/vda2
+UUID=0f05b4fb-daa3-40e2-a7ef-39bf5df51042	/         	ext4      	rw,relatime	0 1
+
+# /dev/vda1
+UUID=7D34-F86C      	/boot/efi 	vfat      	rw,relatime,fmask=0022,dmask=0022,codepage=437,iocharset=ascii,shortname=mixed,errors=remount-ro	0 2
+FSTAB`,
 		// arch-chroot receives the configuration heredoc on stdin.
 		"arch-chroot": "cat >/dev/null; exit 0",
 		"sync":        "exit 0",
@@ -395,6 +403,53 @@ func TestScriptBootloader(t *testing.T) {
 	// booted desktop indistinguishable from a hung one.
 	if strings.Contains(s, `GRUB_CMDLINE_LINUX_DEFAULT="quiet`) {
 		t.Error("the installed system boots quietly, hiding the readiness signal")
+	}
+}
+
+// GRUB answers an error inside a menu entry by waiting ten seconds for a
+// keypress, and grub-mkconfig writes an entry that loads video drivers
+// arm64-efi never built. Those ten seconds were most of march's black screen.
+func TestScriptBootloaderDropsMissingVideoModules(t *testing.T) {
+	s := mustScript(t, testProfile())
+
+	for _, want := range []string{
+		"for m in efi_uga ieee1275_fb vbe vga video_bochs video_cirrus; do",
+		`[ -e "/boot/grub/arm64-efi/$m.mod" ]`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("the video-module cleanup is missing %q", want)
+		}
+	}
+	// It has to happen after the config is written, or there is nothing to edit.
+	if strings.Index(s, "grub-mkconfig") > strings.Index(s, "for m in efi_uga") {
+		t.Error("the video modules are pruned before grub.cfg is generated")
+	}
+}
+
+// The guest boots with no initramfs at all: every driver it needs to reach the
+// root filesystem is built into the kernel, so the phase is 2.2 seconds of a
+// systemd and a udev finding nothing to do. Booting by device rather than by
+// UUID is what makes that possible, since resolving a UUID is itself a job for
+// an initramfs.
+func TestScriptBootloaderBootsWithoutAnInitramfs(t *testing.T) {
+	s := mustScript(t, testProfile())
+
+	if !strings.Contains(s, "rm -f /boot/initramfs-Image.img") {
+		t.Error("an initramfs named after the kernel would be picked up by grub-mkconfig")
+	}
+	if !strings.Contains(s, "GRUB_DISABLE_LINUX_UUID=true") {
+		t.Error("root= stays a UUID, which cannot be resolved without an initramfs")
+	}
+	if strings.Index(s, "GRUB_DISABLE_LINUX_UUID") > strings.Index(s, "grub-mkconfig") {
+		t.Error("the UUID setting is written after grub.cfg is generated, too late to be read")
+	}
+	for _, want := range []string{
+		`grep -q 'linux.*root=/dev/' /boot/grub/grub.cfg`,
+		`grep -q '^[[:space:]]*initrd' /boot/grub/grub.cfg \`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("the install never checks %q", want)
+		}
 	}
 }
 

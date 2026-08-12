@@ -81,15 +81,54 @@ rather than merely detailed. Wayland scales in the compositor, so it arrives
 through Hyprland's `monitor` line; only what XWayland cannot learn from that
 (`QT_SCALE_FACTOR` and the cursor size) is set in the environment.
 
-A fresh boot spends its first seconds on firmware and bootloader, then the
-kernel's framebuffer console scrolls the boot log for a few more — but from
-there until Hyprland's first frame, the window has nothing to draw, and that
-hand-off through SDDM's autologin is long enough to read as a hung black
-screen. march fills it with one dark wallpaper, painted twice: the SDDM greeter
-shows it from the moment the display manager takes the screen, and swaybg
-redraws the same image on the compositor's first frame. Whatever the 
-display-manager and compositor are doing, the window is showing something
-starting rather than a void.
+### The boot
+
+A guest reaches its desktop 4.2 seconds after QEMU starts, timed from launch to
+the compositor's first frame — the first thing this display path can show at
+all. Getting there was four separate waits, none of which was work:
+
+- **GRUB waited ten seconds on every boot.** `grub-mkconfig` writes a
+  `load_video` that insmods every video driver GRUB has ever had, including
+  several arm64-efi does not build. The first missing one is an error, and
+  GRUB answers an error inside a menu entry by printing it and waiting ten
+  seconds for a keypress that is never coming. The install now drops the
+  insmod lines whose modules are not on disk.
+- **The firmware offered a boot menu for five seconds.** EDK2's timeout is a
+  UEFI variable, so `efibootmgr -t 0` in the installed system writes it into
+  the machine's own varstore, where it survives every later boot.
+- **The initramfs had nothing to do.** Arch Linux ARM's kernel has virtio_blk
+  and ext4 built in, so a guest can mount its root without one — and the phase
+  cost 2.2 seconds of a systemd, a udev and a switch-root finding nothing left
+  to load. march boots without it, which means `root=` has to name a device
+  rather than a UUID, since resolving a UUID is itself a job for an initramfs.
+  What it gives up is the recovery path: a kernel that cannot mount its root
+  now stops rather than dropping to an initramfs shell. The end-to-end suite
+  installs and boots a real machine, so a kernel that stopped building those
+  drivers in would fail there rather than in front of somebody.
+- **The EFI partition was on the critical path.** Nothing reads it while the
+  machine runs — it is written to when GRUB is reinstalled — but as a plain
+  fstab entry `local-fs.target` waited for it to appear and be checked, and
+  everything behind that waited too. It is mounted as an automount instead,
+  on the first access.
+
+That is 8.5s to 2.7s of guest boot by `systemd-analyze`, and about twenty
+seconds to 4.2 from the outside.
+
+Four other things were measured and left alone, which is worth writing down so
+they are not tried again: `quiet` plus `systemd.show_status=false` saved
+nothing once the waits were gone, so the boot log stays; a zstd initramfs was
+worth 70ms before the initramfs went away entirely; trimming mkinitcpio's hooks
+changed nothing, because the cost was the phase and not its contents; and
+turning off `cache.direct` to let the host cache the guest's reads changed
+nothing either, which says the boot is not waiting on the disk.
+
+What remains is roughly a second of firmware, 2.7 seconds of guest, and half a
+second for SDDM's autologin to hand over to Hyprland.
+
+There is no splash over the wait, because there is nothing to put it on:
+QEMU's macOS display shows only what the guest renders through virgl, so the
+firmware logo, GRUB and the kernel log are all invisible in that window, and a
+boot splash would be too. Shortening the wait was the only thing left.
 
 **All keystrokes go to the guest**, including combinations macOS would
 otherwise intercept. `Cmd+Space` matters most, since Hyprland binds it to the

@@ -109,6 +109,32 @@ progress and stops with a useful error rather than a timeout:
 · Installing the bootloader
 ```
 
+## The boot
+
+A guest reaches its desktop **4.2 seconds** after `s`, measured from QEMU
+starting to the compositor's first frame. It used to be about twenty, and
+almost all of that was waiting rather than working:
+
+| | |
+| --- | --- |
+| GRUB printing an error and waiting for a keypress | **10.0s** |
+| The firmware offering a boot menu nobody answers | **5.0s** |
+| An initramfs with nothing left to do | **2.2s** |
+| The EFI partition on the critical path | **1.0s** |
+
+`grub-mkconfig` writes a `load_video` that insmods video drivers arm64-efi
+never built, and GRUB answers a missing module by printing it and waiting ten
+seconds for a keypress — on a machine with no keyboard in front of it. EDK2
+then offers its own boot menu for five seconds. The kernel has virtio_blk and
+ext4 built in, so the initramfs it was given had no drivers left to load and
+spent 2.2 seconds proving it. And `/boot/efi` was a plain fstab entry, so
+`local-fs.target` — and the desktop behind it — waited for a partition nothing
+reads at runtime.
+
+The guest's own boot, the part `systemd-analyze` measures, went from 8.5s to
+2.7s. [docs/DESIGN.md](docs/DESIGN.md#the-boot) has the rest, including the
+four things that were measured and turned out not to matter.
+
 ## The desktop
 
 There is one, and it is not a choice: **Hyprland on SDDM**, with a bar, a menu,

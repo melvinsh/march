@@ -215,6 +215,15 @@ func Script(p Profile) (string, error) {
 	// --- configure ---------------------------------------------------------
 	w(`phase %s`, PhaseConfigure)
 	w(`genfstab -U /mnt >> /mnt/etc/fstab`)
+	// Nothing in a running guest reads the ESP — it is written to when GRUB is
+	// reinstalled and otherwise ignored — but as a plain fstab entry it sits on
+	// the critical path anyway: local-fs.target waits for the partition to
+	// appear and be checked, and everything after it, up to the desktop, waits
+	// too. That was a second of the boot. As an automount it is mounted on the
+	// first access instead, which is the next time somebody touches /boot/efi.
+	w(`sed -i -E '\|[[:space:]]/boot/efi[[:space:]]|s|(vfat[[:space:]]+)|\1noauto,x-systemd.automount,|' /mnt/etc/fstab`)
+	w(`grep -q 'x-systemd.automount' /mnt/etc/fstab \`)
+	w(`  || { echo "march: the ESP entry in fstab was not turned into an automount"; exit 1; }`)
 	w(``)
 	// The heredoc is quoted so the guest shell sees it verbatim; values are
 	// interpolated here, at generation time, already shell-quoted.
@@ -258,11 +267,6 @@ func Script(p Profile) (string, error) {
 	w(`pacman-key --init >/dev/null 2>&1`)
 	w(`pacman-key --populate archlinuxarm >/dev/null 2>&1`)
 	w(``)
-	// pacstrap builds the initramfs before this point, so it was generated
-	// without the console settings written just above and warns about it.
-	// Regenerating picks them up.
-	w(`mkinitcpio -P 2>&1 | sed -E '/^==> WARNING: (No module containing|architecture)/d'`)
-	w(``)
 	w(`systemctl enable NetworkManager`)
 	// sshd makes the finished machine reachable on the forwarded port, which is
 	// the command march shows on the detail screen.
@@ -285,18 +289,63 @@ func Script(p Profile) (string, error) {
 	// needing an NVRAM entry to survive.
 	w(`grub-install --target=arm64-efi --efi-directory=/boot/efi \`)
 	w(`  --bootloader-id=arch --removable --no-nvram`)
+	// EDK2 offers its boot menu for five seconds before booting anything, which
+	// in a VM is five seconds of nobody pressing anything — and on this display
+	// path, five seconds of black window. The timeout is a UEFI variable, so it
+	// lives in the machine's own varstore and survives every later boot. It is
+	// only settable where efivarfs is mounted, which is the one place this can
+	// fail without being worth failing the install over.
+	w(`efibootmgr -t 0 >/dev/null 2>&1 || echo "march: could not set the firmware boot timeout"`)
 	// An installed VM waits at its GRUB menu only for a keypress that is never
 	// going to come — the disk is the only boot target, and a black menu is a
 	// worse wait than none. Boot straight through.
 	w(`sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=0/' /etc/default/grub`)
 	// The installed system keeps a serial console so march can watch it boot
 	// alongside the graphical one. "quiet" is deliberately omitted: for a VM,
-	// visible boot progress is worth more than a clean splash, and it gives
-	// march a reliable signal that the desktop has come up.
+	// visible boot progress is worth more than a clean splash, and measuring it
+	// showed the log costs nothing — a quiet boot and a verbose one reach the
+	// desktop in the same 4.2 seconds.
 	w(`sed -i 's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT="console=tty0 console=ttyAMA0,115200"|' /etc/default/grub`)
+	// The guest boots without an initramfs, and that is the single largest
+	// saving in the whole boot: 2.2 seconds of a 6.4-second one, measured by
+	// booting the same disk both ways. An initramfs exists to load the drivers
+	// needed to reach the root filesystem, and this kernel has all of them —
+	// virtio_blk and ext4 — built in, so the whole phase is a systemd, a udev
+	// and a switch-root that find nothing left to do.
+	//
+	// Everything else it would have carried loads a moment later from the real
+	// root instead, which nothing waits on. What it costs is the recovery path:
+	// a kernel that could not mount the root now stops rather than dropping to
+	// an initramfs shell. march's end-to-end suite installs and boots a real
+	// machine, so a kernel that stopped building those drivers in would fail
+	// there rather than in front of somebody.
+	//
+	// root= must then be a device rather than a UUID, since resolving a UUID is
+	// itself a job for an initramfs.
+	// grub-mkconfig names the initramfs after the kernel, and Arch Linux ARM's
+	// kernel is /boot/Image, so it looks for initramfs-Image.img. Removing it
+	// makes the choice deliberate rather than a coincidence of naming.
+	w(`rm -f /boot/initramfs-Image.img /boot/initramfs-Image-fallback.img`)
+	w(`grep -q '^GRUB_DISABLE_LINUX_UUID=' /etc/default/grub \`)
+	w(`  && sed -i 's|^GRUB_DISABLE_LINUX_UUID=.*|GRUB_DISABLE_LINUX_UUID=true|' /etc/default/grub \`)
+	w(`  || printf 'GRUB_DISABLE_LINUX_UUID=true\n' >> /etc/default/grub`)
 	w(`grub-mkconfig -o /boot/grub/grub.cfg`)
+	// grub-mkconfig writes a load_video that insmods every video driver GRUB
+	// has ever had, including several that arm64-efi does not build. The first
+	// one that is missing is an error, and GRUB answers an error inside a menu
+	// entry by printing it and waiting ten seconds for a keypress that is never
+	// coming — ten seconds of a black window before the kernel is even loaded.
+	// Only the drivers this platform actually shipped are left in.
+	w(`for m in efi_uga ieee1275_fb vbe vga video_bochs video_cirrus; do`)
+	w(`  [ -e "/boot/grub/arm64-efi/$m.mod" ] || sed -i "/^[[:space:]]*insmod $m\$/d" /boot/grub/grub.cfg`)
+	w(`done`)
 	w(`grep -q 'linux.*/boot/' /boot/grub/grub.cfg || grep -q 'linux\s' /boot/grub/grub.cfg \`)
 	w(`  || { echo "march: grub.cfg has no kernel entry"; exit 1; }`)
+	w(`grep -q 'linux.*root=/dev/' /boot/grub/grub.cfg \`)
+	w(`  || { echo "march: grub.cfg boots by UUID, which needs an initramfs"; exit 1; }`)
+	w(`grep -q '^[[:space:]]*initrd' /boot/grub/grub.cfg \`)
+	w(`  && { echo "march: grub.cfg loads an initramfs the boot is timed without"; exit 1; }`)
+	w(`true`)
 	w(`MARCH_BOOT`)
 	w(``)
 	w(`sync`)
