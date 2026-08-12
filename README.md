@@ -356,6 +356,23 @@ The first leaves the machine running; the second re-runs the in-guest suite
 against it, which is the way to iterate on the suite without paying for another
 install.
 
+### Releasing
+
+`Formula/` here is the source of truth for both Homebrew formulae. Homebrew
+itself installs from a second repository,
+[melvinsh/homebrew-march](https://github.com/melvinsh/homebrew-march), because
+`brew tap x/y` only ever looks for a repository named `homebrew-y` — that one
+is a mirror, and nothing in it is edited by hand.
+
+Cutting a release is a tag and one command, which hashes the tarball GitHub
+actually serves, writes it into the formula, pushes both repositories and
+checks the result with `brew fetch`:
+
+```sh
+git tag -a v1.6.0 -m "v1.6.0" && git push origin v1.6.0
+docs/publish-formulae.sh
+```
+
 The pictures in this README are made the same way: `docs/capture.sh` drives a
 running guest's own compositor over ssh and captures with `grim`, and
 `docs/tapes/` records the TUI with [VHS](https://github.com/charmbracelet/vhs).

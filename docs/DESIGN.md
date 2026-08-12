@@ -214,6 +214,32 @@ Sizing defaults leave the host usable: half the cores and a quarter of RAM
 when accelerated, much less under TCG, with floors, ceilings, and warnings
 when you overcommit.
 
+## Packaging
+
+march ships through Homebrew as two formulae: `march` itself and `qemu-march`,
+the patched QEMU that makes `virtio-gpu-gl` work on macOS. Both live in
+[`Formula/`](../Formula) in this repository, next to the patch and the NOTICE
+files that explain where it came from — the patch is march's own work, and it
+belongs with the code it exists for.
+
+Homebrew cannot install from here, though. `brew tap melvinsh/march` resolves
+to `github.com/melvinsh/homebrew-march` and nothing else, so the formulae have
+to exist in a repository with that name. That repository is a **mirror**: every
+file in its `Formula/` is a copy, and editing one there is how the two drift
+apart.
+
+[`docs/publish-formulae.sh`](publish-formulae.sh) is what keeps them identical.
+It reads the sha256 off the tag's tarball as GitHub serves it rather than off a
+local `git archive` — the two differ, and that difference shipped a formula
+that could not install until somebody noticed — writes url, sha256 and version
+into `Formula/march.rb`, copies the directory into the tap, and refuses to
+finish unless `diff -r` between the two comes back empty. It ends by resolving
+the formula through `brew fetch`, which is the install path a user takes minus
+the build.
+
+It is safe to re-run: a release that is already published reports that nothing
+changed.
+
 ## Layout
 
 VMs live under `$XDG_DATA_HOME/march` (override with `-home` or `MARCH_HOME`):
